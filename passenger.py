@@ -16,6 +16,8 @@ import math
 import json
 import os
 import threading
+import asyncio
+from typing import Dict
 # 线程池：并行计算隔离任务
 from concurrent.futures import ThreadPoolExecutor, wait
 # 容器：滚动缓存队列、多层字典
@@ -1439,12 +1441,12 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                     last_status[status_key] = total_trigger
                     if total_trigger:
                         abs_draw = abs(drawdown)
-
+                        key_word = get_stock_reason_keyword(code, name, day_pct)
                         if branch1_trigger:
                             # 追加当前日内涨幅 day_pct:.1f
-                            write_log(f"⚠️ 【COND1-冲高跳水】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘10分钟后最大回撤 {abs_draw:.1f}%")
+                            write_log(f"⚠️ 【COND1-冲高跳水】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘10分钟后最大回撤 {abs_draw:.1f}%，关键词：{key_word}")
                         else:
-                            write_log(f"⚠️ 【COND1-开盘急跌】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘前10分钟快速回撤 {abs_draw:.1f}%")
+                            write_log(f"⚠️ 【COND1-开盘急跌】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘前10分钟快速回撤 {abs_draw:.1f}%，关键词：{key_word}")
 
             # ===================== 模块2：cond2 5日涨幅>cond2_stocks_value%龙头股 日内横盘监控（暂时屏蔽，不能删除） =====================
             #for stock_code in cond2_stocks:
@@ -1588,8 +1590,9 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                 if key not in COMMON_STOCK_LAST_STATUS or COMMON_STOCK_LAST_STATUS[key] != trigger:
                     COMMON_STOCK_LAST_STATUS[key] = trigger
                     if trigger:
+                        key_word = get_stock_reason_keyword(code, name, day_pct)
                         abs_down = abs(drawdown)
-                        write_common_log(f"【📉 容量冲高回落】{code} {name} | 日内涨幅{day_pct:.1f}% | 最高回撤{abs_down:.1f}%")
+                        write_common_log(f"【📉 容量冲高回落】{code} {name} | 日内涨幅{day_pct:.1f}% | 最高回撤{abs_down:.1f}%，关键词：{key_word}")
 
         except Exception:
             pass
@@ -1832,9 +1835,10 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 three_day_total_pct = (now_price - close_3d_ago) / close_3d_ago
                 if three_day_total_pct >= 0.20:
                     continue
-
+                
+                key_word = get_stock_reason_keyword(code, name, today_pct)
                 # 条件全部满足 终端+日志同步输出
-                content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}"
+                content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，关键词：{key_word}"
                 write_vol_log(content)
                 VOL_START_NOTICE_SET.add(code)
 
@@ -1848,6 +1852,9 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
 
 def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
+    #key_word = get_stock_reason_keyword("600206.SH", "有研新材", 8.19)
+    #print(key_word)
+
     is_running = [True]
     # 启动持仓股均价监控线程，打印到终端和日志，9.30~9:46
     threading.Thread(target=position_avg_price_monitor, args=(is_running,), daemon=True).start()
@@ -1930,6 +1937,95 @@ THREAD_TIMEOUT_SEC = 15
 MONITOR_PRINT_INTERVAL = 30
 last_monitor_print = datetime.now()
 
+
+# 配置
+API_URL = "https://api.deepseek.com/v1/chat/completions"
+# 缓存：key=股票代码，value=(关键词, 缓存时间戳)
+LLM_CACHE: Dict[str, tuple[str, float]] = {}   
+# 缓存有效期 300秒=5分钟，避免频繁请求
+CACHE_EXPIRE = 300  
+# 请求超时
+REQ_TIMEOUT = 10   
+
+def get_deepseek_api_key():
+    # 获取当前py脚本所在目录
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # 拼接同级txt配置文件
+    txt_path = os.path.join(base_dir, "api_config.txt")
+    
+    if not os.path.exists(txt_path):
+        print("⚠️ 同级目录未找到 api_config.txt 配置文件")
+        return ""
+    
+    try:
+        with open(txt_path, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                line = line.strip()
+                if line.startswith("DEEPSEEK_API_KEY="):
+                    return line.split("=", 1)[1].strip()
+    except Exception as e:
+        print(f"⚠️ 读取配置失败：{e}")
+    return ""
+
+# 同步底层请求
+def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
+    prompt = f"""
+【身份】你是A股盘口分析师，只信今日真实财经新闻，拒绝编造。
+【任务】只找【{stock_name}({stock_code})】今日{rise_pct}%大涨的**唯一真实催化概念和题材**。
+【数据源】必须来自：同花顺股票和通达信股票异动解读。
+【输出铁律】
+1. 只输出1个中文关键词（真实催化概念/事件）；
+2. 禁止通用词：AI、新能源、国产替代、科技、成长；
+3. 禁止解释、禁止理由、禁止多余文字；
+4. 找不到真实原因，只输出“未知”。
+"""
+    DEEPSEEK_API_KEY = get_deepseek_api_key()
+
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.0,
+        "max_tokens": 5,
+        "top_p": 0.1
+    }
+    import urllib.request
+    try:
+        data = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        req = urllib.request.Request(API_URL, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            word = res["choices"][0]["message"]["content"].strip()
+            # 过滤通用词
+            if word in {"AI", "新能源", "国产替代", "科技", "成长"}:
+                return "未知"
+            return word
+    except Exception:
+        return "未知"
+    
+# 异步封装
+async def async_get_rise_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
+    now_ts = time.time()
+    if stock_code in LLM_CACHE:
+        word, t = LLM_CACHE[stock_code]
+        if now_ts - t < CACHE_EXPIRE:
+            return word
+    loop = asyncio.get_running_loop()
+    word = await loop.run_in_executor(None, _sync_get_keyword, stock_code, stock_name, rise_pct)
+    LLM_CACHE[stock_code] = (word, now_ts)
+    return word
+
+# 清空缓存接口
+def clear_llm_cache():
+    LLM_CACHE.clear()
+
+
+# 同步封装函数，随便在哪调用都能用
+def get_stock_reason_keyword(code, name, rise):
+    return asyncio.run(async_get_rise_keyword(code, name, rise))
 
 # =============================================================================
 # 程序入口主函数（一键启动全部流程）
