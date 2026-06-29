@@ -15,6 +15,7 @@ import time
 import math
 import json
 import os
+import re
 import threading
 import asyncio
 from typing import Dict
@@ -1443,10 +1444,18 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                         abs_draw = abs(drawdown)
                         key_word = get_stock_reason_keyword(code, name, day_pct)
                         if branch1_trigger:
-                            # 追加当前日内涨幅 day_pct:.1f
-                            write_log(f"⚠️ 【COND1-冲高跳水】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘10分钟后最大回撤 {abs_draw:.1f}%，关键词：{key_word}")
+                            # 先固定股票名称4汉字宽度
+                            fixed_name1 = name.ljust(4, "　")
+                            # 开盘10分钟后最大回撤
+                            content1 = f"⚠️ 【COND1-冲高跳水】{code:<12} {fixed_name1} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                            write_log(content1)
                         else:
-                            write_log(f"⚠️ 【COND1-开盘急跌】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘前10分钟快速回撤 {abs_draw:.1f}%，关键词：{key_word}")
+                            
+                            # 先固定股票名称4汉字宽度
+                            fixed_name2 = name.ljust(4, "　")
+                            # 开盘前10分钟快速回撤
+                            content2 = f"⚠️ 【COND1-开盘急跌】{code:<12} {fixed_name2} | 涨幅{day_pct:>5.1f}% | 快速回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                            write_log(content2)
 
             # ===================== 模块2：cond2 5日涨幅>cond2_stocks_value%龙头股 日内横盘监控（暂时屏蔽，不能删除） =====================
             #for stock_code in cond2_stocks:
@@ -1496,7 +1505,12 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                     last_status[status_key] = branch3_trigger
                     if branch3_trigger:
                         abs_draw = abs(drawdown)
-                        write_log(f"↘️【COND3-昨涨停高开跳水】{code} {name} | 当前日内涨幅{day_pct:.1f}%，开盘前10分钟最大回撤 {abs_draw:.1f}%")
+                        key_word = get_stock_reason_keyword(code, name, day_pct)
+                        # 先固定股票名称4汉字宽度
+                        fixed_name = name.ljust(4, "　")
+                        #开盘前10分钟最大回撤
+                        content = f"↘️【COND3-涨停急跌】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                        write_log(content)
 
         except Exception:
             # 全局捕获循环异常，单模块崩溃不中断整个监控线程
@@ -1592,7 +1606,11 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                     if trigger:
                         key_word = get_stock_reason_keyword(code, name, day_pct)
                         abs_down = abs(drawdown)
-                        write_common_log(f"【📉 容量冲高回落】{code} {name} | 日内涨幅{day_pct:.1f}% | 最高回撤{abs_down:.1f}%，关键词：{key_word}")
+
+                        # 先固定股票名称4汉字宽度
+                        fixed_name = name.ljust(4, "　")
+                        content = f"【📉 容量冲高回落】{code:<12} {fixed_name} | 日内涨幅{day_pct:>6.1f}% | 最高回撤{abs_down:>6.1f}% | 关键词：{key_word}"
+                        write_common_log(content)
 
         except Exception:
             pass
@@ -1838,7 +1856,18 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 
                 key_word = get_stock_reason_keyword(code, name, today_pct)
                 # 条件全部满足 终端+日志同步输出
-                content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，关键词：{key_word}"
+                #content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，| 关键词：{key_word}"
+
+                # 先格式化股票名称 固定4汉字宽度
+                fix_name = name.ljust(4, "　")
+                # 整条拼接对齐格式
+                content = (
+                    f"【🚀 右侧放量启动】{code:<12} {fix_name} "
+                    f"| 日内涨幅{today_pct:>7.2%} "
+                    f"| 三日涨幅{three_day_total_pct:>7.2%} "
+                    f"| 关键词：{key_word}"
+                )
+
                 write_vol_log(content)
                 VOL_START_NOTICE_SET.add(code)
 
@@ -1849,6 +1878,203 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
     
     VOL_START_NOTICE_SET.clear()
     write_vol_log("🔴 放量启动监测线程已停止")
+
+
+def get_watch_stock_list(file_path):
+    stock_list = []
+    if not os.path.exists(file_path):
+        return stock_list
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                line = line.strip()
+                if not line:
+                    continue
+                info = line.split(maxsplit=1)
+                if len(info) == 2:
+                    stock_list.append((info[0], info[1]))
+    except Exception:
+        pass
+    return stock_list
+
+def append_strength_log(msg):
+    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Log_StockStrengthYesterday.txt")
+    with open(log_file, "a", encoding="utf-8") as fw:
+        fw.write(msg + "\n")
+
+# 改用你自己封装的tick解析函数获取涨跌幅
+def get_single_stock_rise(stock_code):
+    try:
+        # 调用你已写好的tick解析函数
+        tick_data = parse_tick_info(stock_code)
+        pre_close = tick_data.get("pre_close", 0.0)
+        last_price = tick_data.get("now", 0.0)
+        if pre_close <= 0:
+            return 0.0
+        rise_percent = (last_price - pre_close) / pre_close * 100
+        return round(rise_percent, 2)
+    except Exception:
+        return 0.0
+    
+# 对齐版  
+def stock_group_strength_monitor():
+    base_path = os.path.dirname(os.path.abspath(__file__))
+    file_break = os.path.join(base_path, "B_VolPriceBreak.txt")
+    file_drawdown = os.path.join(base_path, "B_CommonDrawdown.txt")
+
+    while True:
+
+        now_dt = datetime.now()
+        # 直接取系统当前交易时间
+        curr_hour = now_dt.hour
+        curr_min = now_dt.minute
+        # 只在交易时段监控
+        if not is_trade_time(curr_hour, curr_min):
+            continue
+
+        break_stocks = get_watch_stock_list(file_break)
+        down_stocks = get_watch_stock_list(file_drawdown)
+        now_time = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+
+        # 放量突破组 排序逻辑不变
+        break_info = []
+        for code, name in break_stocks:
+            rise = get_single_stock_rise(code)
+            break_info.append((rise, code, name))
+        break_info.sort(reverse=True, key=lambda x: x[0])
+        break_avg = round(sum(i[0] for i in break_info)/len(break_info),2) if break_info else 0.0
+
+        # 高位回落组 排序逻辑不变
+        down_info = []
+        for code, name in down_stocks:
+            rise = get_single_stock_rise(code)
+            down_info.append((rise, code, name))
+        down_info.sort(reverse=True, key=lambda x: x[0])
+        down_avg = round(sum(i[0] for i in down_info)/len(down_info),2) if down_info else 0.0
+
+        # 大佬通用对齐方案：固定单元格总宽度，填充全角空格强制对齐
+        def get_fixed_cell(name, rise):
+            # 名称固定占4个汉字位，不足补【全角空格】
+            name_full = name.ljust(4, "　")
+            # 涨幅固定格式 正负统一 保留2位小数
+            rise_str = f"{rise:6.2f}%"
+            # 拼接成固定长度单元格
+            return f"{name_full}{rise_str}"
+
+        # 四列竖排 先下后右
+        def make_align_text(data_list):
+            col = 4
+            total = len(data_list)
+            if total == 0:
+                return ""
+            row = (total + col - 1) // col
+            lines = []
+            for r in range(row):
+                row_buf = []
+                for c in range(col):
+                    idx = r + c * row
+                    if idx >= total:
+                        continue
+                    val, _, n = data_list[idx]
+                    row_buf.append(get_fixed_cell(n, val))
+                lines.append(" | ".join(row_buf))
+            return "\n".join(lines)
+
+        break_show = make_align_text(break_info)
+        down_show = make_align_text(down_info)
+
+        # 拼接日志
+        log_txt = f"—————————— {now_time} 昨筛选强度监控 ——————————"
+        log_txt += f"\n【昨量价突破组】共{len(break_stocks)}只 | 平均涨幅：{break_avg}%"
+        if break_show:
+            log_txt += f"\n{break_show}"
+        log_txt += f"\n【昨冲高回落组】共{len(down_stocks)}只 | 平均涨幅：{down_avg}%"
+        if down_show:
+            log_txt += "\n" + down_show
+        log_txt += "\n"
+
+        append_strength_log(log_txt)
+        time.sleep(60)
+
+# 日志股票代码提取交叉去重
+def parse_log_stock_filter_with_name():
+    """
+    功能：
+    1. 从 Log_VolPriceBreak.txt、Log_CommonDrawdown.txt 提取 代码+名称
+    2. 两份日志都出现的股票，从 VolPriceBreak 剔除，只保留在 CommonDrawdown
+    3. 写入：代码  名称
+    4. 前置判断：目标文件已有内容则直接退出不重写
+    """
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    # 日志文件
+    log_vol_path = os.path.join(base_dir, "Log_VolPriceBreak.txt")
+    log_down_path = os.path.join(base_dir, "Log_CommonDrawdown.txt")
+    # 输出文件
+    out_vol_path = os.path.join(base_dir, "B_VolPriceBreak.txt")
+    out_down_path = os.path.join(base_dir, "B_CommonDrawdown.txt")
+
+    # ========== 最前面新增判断：目标文件存在且有内容，直接返回不执行 ==========
+    def file_has_content(file_path):
+        if not os.path.exists(file_path):
+            return False
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return bool(f.read().strip())
+        except:
+            return False
+
+    if file_has_content(out_vol_path) and file_has_content(out_down_path):
+        print("📄 目标整理文件已有数据，无需重复生成，直接跳过")
+        return
+    # ======================================================================
+
+    # 正则：抓 600036.SH 招商银行 这种
+    pattern = r'(\d{6}\.(?:SH|SZ|BJ))\s*([^\d\s]+)'
+
+    def read_code_name_set(log_path):
+        """读取日志，返回 {(code, name), ...}"""
+        s = set()
+        if not os.path.exists(log_path):
+            return s
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                text = f.read()
+            matches = re.findall(pattern, text)
+            for code, name in matches:
+                s.add((code.strip(), name.strip()))
+        except Exception as e:
+            print(f"读取 {os.path.basename(log_path)} 异常: {e}")
+        return s
+
+    # 读取两组 (code, name)
+    vol_set = read_code_name_set(log_vol_path)
+    down_set = read_code_name_set(log_down_path)
+
+    # 只按 code 去重（名称跟着 code 走）
+    vol_codes = {c for c, n in vol_set}
+    down_codes = {c for c, n in down_set}
+    inter_codes = vol_codes & down_codes
+
+    # 放量股：不在交集里的
+    pure_vol = [(c, n) for c, n in vol_set if c not in inter_codes]
+    # 回落股：全部
+    all_down = [(c, n) for c, n in down_set]
+
+    # 写入 VolPriceBreak.txt
+    with open(out_vol_path, "w", encoding="utf-8") as f:
+        for c, n in sorted(pure_vol):
+            f.write(f"{c} {n}\n")
+
+    # 写入 CommonDrawdown.txt
+    with open(out_down_path, "w", encoding="utf-8") as f:
+        for c, n in sorted(all_down):
+            f.write(f"{c} {n}\n")
+
+    print(f"✅ 写入完成 | 量价齐升股：{len(pure_vol)} 只 | 容量冲高回落股：{len(all_down)} 只")
+
+
+
+
 
 def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
@@ -1862,12 +2088,14 @@ def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     # 启动强势股监控线程，打印到日志，全天
     threading.Thread(target=strong_stock_pullback_strategy, args=(cond1_stocks, cond2_stocks, cond3_stocks, is_running), daemon=True).start()
     time.sleep(0.5)
-    # 启动普通个股回撤监测线程，打印到终端，全天
+    # 启动容量冲高回落监测线程，打印到终端和日志，全天
     threading.Thread(target=common_stock_high_drawdown_monitor, args=(pool, cond1_stocks, cond2_stocks, cond3_stocks, is_running), daemon=True).start()
     time.sleep(0.5)
-    # 放量首次启动个股，打印到终端，10.00~
+    # 启动量价齐升个股监测线程，打印到终端和日志，10.00~
     threading.Thread(target=volume_break_start_monitor, args=(is_running, pool, cond1_stocks, cond2_stocks, cond3_stocks), daemon=True).start()
-    
+    time.sleep(0.5)
+    #启动昨日筛选股票监控线程，打印到日志，全天
+    threading.Thread(target=stock_group_strength_monitor, daemon=True).start()
     
     print("✅ 该版本没有板块刷新/强势股监控/订单流分析")
     
@@ -2066,7 +2294,9 @@ if __name__ == "__main__":
         time.sleep(2.5)
         # 10. 筛选两类强势股，用于后台回调监控
         cond1, cond2, cond3 = filter_strong_stocks_separate(stock_pool)
-        # 11. 启动主策略循环（后台线程+定时选股）
+        # 11. 日志过滤、将一天的量价突破日志和容量冲高回落日志中的代码提取出来
+        parse_log_stock_filter_with_name()
+        # 12. 启动主策略循环（后台线程+定时选股）
         run(stock_pool, cond1, cond2, cond3)
     except KeyboardInterrupt:
         print("\n⚠️ 用户主动终止程序")
