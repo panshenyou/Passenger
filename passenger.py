@@ -1921,7 +1921,7 @@ def stock_group_strength_monitor():
     base_path = os.path.dirname(os.path.abspath(__file__))
     file_break = os.path.join(base_path, "B_VolPriceBreak.txt")
     file_drawdown = os.path.join(base_path, "B_CommonDrawdown.txt")
-
+    append_strength_log("========== 昨日筛选股票强度监控线程启动 ==========")
     while True:
 
         now_dt = datetime.now()
