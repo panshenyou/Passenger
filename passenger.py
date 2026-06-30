@@ -1350,7 +1350,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
     def write_log(msg):
         try:
             time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            content_line = f"[{time_str}] {msg}\n\n"  # 每条日志空一行分隔，阅读更清晰
+            content_line = f"[{time_str}] {msg}\n"  # 每条日志空一行分隔，阅读更清晰
             log_file.write(content_line)
             log_file.flush()  # 强制刷盘，实时写入文件无延迟
         except Exception:
@@ -1444,15 +1444,18 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                         abs_draw = abs(drawdown)
                         key_word = get_stock_reason_keyword(code, name, day_pct)
                         if branch1_trigger:
-                            # 先固定股票名称4汉字宽度
-                            fixed_name1 = name.ljust(4, "　")
+                            
+                            # 固定4汉字宽度：超长截断，不足补空格
+                            short_name = name[:4]
+                            fixed_name1 = short_name.ljust(4, "　")
                             # 开盘10分钟后最大回撤
                             content1 = f"⚠️ 【COND1-冲高跳水】{code:<12} {fixed_name1} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                             write_log(content1)
                         else:
                             
-                            # 先固定股票名称4汉字宽度
-                            fixed_name2 = name.ljust(4, "　")
+                            # 固定4汉字宽度：超长截断，不足补空格
+                            short_name = name[:4]
+                            fixed_name2 = short_name.ljust(4, "　")
                             # 开盘前10分钟快速回撤
                             content2 = f"⚠️ 【COND1-开盘急跌】{code:<12} {fixed_name2} | 涨幅{day_pct:>5.1f}% | 快速回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                             write_log(content2)
@@ -1506,8 +1509,10 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                     if branch3_trigger:
                         abs_draw = abs(drawdown)
                         key_word = get_stock_reason_keyword(code, name, day_pct)
-                        # 先固定股票名称4汉字宽度
-                        fixed_name = name.ljust(4, "　")
+
+                        # 固定4汉字宽度：超长截断，不足补空格
+                        short_name = name[:4]
+                        fixed_name = short_name.ljust(4, "　")
                         #开盘前10分钟最大回撤
                         content = f"↘️【COND3-涨停急跌】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                         write_log(content)
@@ -1607,8 +1612,9 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                         key_word = get_stock_reason_keyword(code, name, day_pct)
                         abs_down = abs(drawdown)
 
-                        # 先固定股票名称4汉字宽度
-                        fixed_name = name.ljust(4, "　")
+                        # 固定4汉字宽度：超长截断，不足补空格
+                        short_name = name[:4]
+                        fixed_name = short_name.ljust(4, "　")
                         content = f"【📉 容量冲高回落】{code:<12} {fixed_name} | 日内涨幅{day_pct:>6.1f}% | 最高回撤{abs_down:>6.1f}% | 关键词：{key_word}"
                         write_common_log(content)
 
@@ -1745,13 +1751,13 @@ def position_avg_price_monitor(is_running):
 
             # 跌破满5分钟 提示卖出一半
             if dur_min >= 5 and not timer_info["tip_half"]:
-                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已满5分钟，建议卖出一半仓位")
+                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已5分钟，建议卖出一半")
                 timer_info["tip_half"] = True
                 timer_info["last_tip_time"] = now_dt
 
             # 跌破满10分钟 提示全部清仓
             elif dur_min >= 10 and not timer_info["tip_all"]:
-                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已满10分钟，建议全部清仓离场")
+                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已10分钟，建议全部清仓")
                 timer_info["tip_all"] = True
                 timer_info["last_tip_time"] = now_dt
 
@@ -1858,8 +1864,10 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 # 条件全部满足 终端+日志同步输出
                 #content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，| 关键词：{key_word}"
 
-                # 先格式化股票名称 固定4汉字宽度
-                fix_name = name.ljust(4, "　")
+                
+                # 固定4汉字宽度：超长截断，不足补空格
+                short_name = name[:4]
+                fix_name = short_name.ljust(4, "　")
                 # 整条拼接对齐格式
                 content = (
                     f"【🚀 右侧放量启动】{code:<12} {fix_name} "
@@ -1954,8 +1962,10 @@ def stock_group_strength_monitor():
 
         # 大佬通用对齐方案：固定单元格总宽度，填充全角空格强制对齐
         def get_fixed_cell(name, rise):
-            # 名称固定占4个汉字位，不足补【全角空格】
-            name_full = name.ljust(4, "　")
+
+            # 固定4汉字宽度：超长截断，不足补空格
+            short_name = name[:4]
+            name_full = short_name.ljust(4, "　")
             # 涨幅固定格式 正负统一 保留2位小数
             rise_str = f"{rise:6.2f}%"
             # 拼接成固定长度单元格
@@ -2199,12 +2209,12 @@ def get_deepseek_api_key():
 def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
     prompt = f"""
 【身份】你是A股盘口分析师，只信今日真实财经新闻，拒绝编造。
-【任务】只找【{stock_name}({stock_code})】今日{rise_pct}%大涨的**唯一真实催化概念和题材**。
+【任务】只找【{stock_name}({stock_code})】今日{rise_pct}%大涨的**真实催化概念和题材**。
 【数据源】必须来自：同花顺股票和通达信股票异动解读。
 【输出铁律】
-1. 只输出1个中文关键词（真实催化概念/事件）；
+1. 仅输出中文关键词，最多3个，用顿号隔开；
 2. 禁止通用词：AI、新能源、国产替代、科技、成长；
-3. 禁止解释、禁止理由、禁止多余文字；
+3. 禁止解释、禁止理由、禁止多余文字、禁止句子；
 4. 找不到真实原因，只输出“未知”。
 """
     DEEPSEEK_API_KEY = get_deepseek_api_key()
@@ -2213,10 +2223,10 @@ def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
         "model": "deepseek-chat",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0,
-        "max_tokens": 5,
+        "max_tokens": 30,  # 放宽足够放下4个短关键词
         "top_p": 0.1
     }
-    import urllib.request
+    import urllib.request, json
     try:
         data = json.dumps(payload).encode("utf-8")
         headers = {
@@ -2227,10 +2237,13 @@ def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             word = res["choices"][0]["message"]["content"].strip()
-            # 过滤通用词
-            if word in {"AI", "新能源", "国产替代", "科技", "成长"}:
+            # 过滤违禁通用词
+            ban_words = {"AI", "新能源", "国产替代", "科技", "成长"}
+            if any(bw in word for bw in ban_words):
                 return "未知"
-            return word
+            # 强制截断最长20字符，杜绝长文本
+            word = word[:20]
+            return word if word else "未知"
     except Exception:
         return "未知"
     
