@@ -2301,7 +2301,7 @@ if __name__ == "__main__":
         batch_download_history(stock_pool, days=10)
         time.sleep(1)
         # 8. 加载通达信板块映射关系
-        init_stock_sector_dict()
+        #init_stock_sector_dict()
         # 9. 批量订阅股票池全部Tick行情
         init_subscribe(stock_pool)
         time.sleep(2.5)
