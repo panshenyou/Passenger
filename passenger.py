@@ -1708,7 +1708,7 @@ def position_avg_price_monitor(is_running):
         curr_hour = now_dt.hour
         curr_min = now_dt.minute
         # 只在交易时段监控
-        if not is_trade_time3(curr_hour, curr_min):
+        if not is_trade_time(curr_hour, curr_min):
             continue
         
         for code in pos_codes:
@@ -1718,15 +1718,23 @@ def position_avg_price_monitor(is_running):
             
             code_name = f"{code} {tick['name']}"
             now_price = tick["now"]
-           
+
             # ========== 正确计算日内成交均价 ==========
             full_tick = xtdata.get_full_tick([code]).get(code, {})
             total_vol_hand = full_tick.get("volume", 0.0)
             total_amt = full_tick.get("amount", 0.0)
+  
             if total_vol_hand <= 0:
                 continue
             avg_price = total_amt / (total_vol_hand * 100)
             # =========================================
+            now_price = tick["now"]
+            pre_close = tick["pre_close"]
+            today_pct = (now_price - pre_close) / pre_close
+            write_pos_log(f"【🟢 持仓股涨跌幅】{code_name} 日内涨跌幅 {today_pct:.2%}%")
+            # 只在交易时段监控
+            if not is_trade_time3(curr_hour, curr_min):
+                continue
 
             # 现价站上均价 清除计时
             if now_price >= avg_price:
