@@ -1293,7 +1293,15 @@ def parse_tick_info(code: str):
 
     # 拆分时间字符串 "20260615 09:32:15"
     date_str, hms_str = time_tag.split(" ")
-    hour, minute, sec = map(int, hms_str.split(":"))
+    #hour, minute, sec = map(int, hms_str.split(":"))
+    time_parts = hms_str.split(":")
+    h = int(time_parts[0])
+    m = int(time_parts[1])
+    s_str = time_parts[2]
+    # 切掉毫秒只留整数秒
+    s = int(s_str.split('.')[0])
+    hour, minute, sec = h, m, s
+
     # 计算核心比例数据
     open_pct = (open_price / pre_close - 1) * 100          # 开盘涨跌幅
     day_pct = (last_price / pre_close - 1) * 100           # 【新增】当前日内实时涨幅
