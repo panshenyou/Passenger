@@ -1,3 +1,38 @@
+# ============================================
+#                xtdata 接口
+# ============================================
+# xtdata.download_sector_data()
+# 作用：下载全市场板块、股票 - 板块映射（你代码必须要）
+# xtdata.get_stock_list_in_sector ("沪深 A 股")
+# 作用：获取全 A 股列表
+# xtdata.download_history_data(code, "1d", start, end)
+# 作用：下载单只股票日线历史数据
+# xtdata.get_local_data(code, "1d", count=N)
+# 作用：读取本地缓存日线（你大量用）
+# xtdata.subscribe_whole_quote(stocks, callback=tick_callback_func)
+# 作用：订阅全市场 Tick 全推，绑定回调
+# xtdata.unsubscribe_whole_quote()
+# 作用：退出时取消所有订阅
+# xtdata.get_full_tick([code])
+# 作用：实时获取单只股票最新 Tick 快照
+# xtdata.get_instrument_detail(code)
+# 作用：获取股票基础信息（名称、上市日期、流通股本）
+# xtdata.get_field(code, "amount")
+# 作用：获取实时成交额
+# ============================================
+#                xttrader 接口
+# ============================================
+# XtQuantTrader(userdata_path, session_id)
+# 作用：创建交易 API 实例
+# trade_robot.start()
+# 作用：启动交易线程
+# trade_robot.connect()
+# 作用：连接 MiniQMT 客户端
+# trade_robot.query_stock_asset(stock_account)
+# 作用：查询账户资产（可用资金、总资产）
+# trade_robot.stop()
+# 作用：关闭交易 API
+
 # ==============================================
 # MiniQMT 龙头股量化策略（高并发完整版+订单流五大指标）
 # 核心特性：
@@ -9,16 +44,16 @@
 # 6. 多后台常驻线程：板块刷新、强势股监控、订单流分析、主选股循环解耦
 # 7. 滚动队列管控内存、读写短锁多线程安全、9:45延迟选股、日线本地缓存加速
 # ==============================================
-import sys
-import subprocess
 import time
-import math
 import json
 import os
 import re
 import threading
 import asyncio
 from typing import Dict
+import dashscope
+from http import HTTPStatus
+from dashscope import Generation
 # 线程池：并行计算隔离任务
 from concurrent.futures import ThreadPoolExecutor, wait
 # 容器：滚动缓存队列、多层字典
@@ -33,6 +68,38 @@ from xtquant.xttrader import XtQuantTrader
 from xtquant.xttype import StockAccount
 from xtquant import xtdata
 
+# ===================== 全局统一路径配置（全部改为相对路径/脚本同级目录） =====================
+# 项目根目录
+QMT_PROJECT_ROOT = r"C:\Users\15113\Desktop\QMT_Software\py_strategy"
+# 子目录绝对路径
+CACHE_PATH = os.path.join(QMT_PROJECT_ROOT, "cache")
+CONFIG_PATH = os.path.join(QMT_PROJECT_ROOT, "config")
+LOG_PATH = os.path.join(QMT_PROJECT_ROOT, "log")
+
+# 缓存文件
+CACHE_FILE = os.path.join(CACHE_PATH, "Downloaded_Stocks.json")
+WATCH_LIST_PATH = os.path.join(CACHE_PATH, "WatchList.txt")
+FILE_BREAK = os.path.join(CACHE_PATH, "VolPriceBreak.txt")
+FILE_DRAWDOWN = os.path.join(CACHE_PATH, "CommonDrawdown.txt")
+
+# 日志文件
+STRONG_LOG_PATH = os.path.join(LOG_PATH, "Log_StrongStock.txt")
+COMMON_DRAWDOWN_LOG_PATH = os.path.join(LOG_PATH, "Log_CommonDrawdown.txt")
+POSITION_LOG_PATH = os.path.join(LOG_PATH, "Log_PositionStock.txt")
+VOL_BREAK_LOG_PATH = os.path.join(LOG_PATH, "Log_VolPriceBreak.txt")
+YESTERDAY_STRENGTH_LOG = os.path.join(LOG_PATH, "Log_StockStrengthYesterday.txt")
+ABNORMALREASON_LOG = os.path.join(LOG_PATH, "Log_AbnormalReason.txt")
+
+# 配置文件
+CONFIG_TXT = os.path.join(CONFIG_PATH, "Config.txt")
+POSITION_STOCK_TXT = os.path.join(CONFIG_PATH, "Position_Stock.txt")
+
+#大模型
+DEEPSEEK_INDEX = 1
+QWEN_INDEX = 2
+
+
+
 # =============================================================================
 #                                   全局变量
 # =============================================================================
@@ -42,10 +109,14 @@ cond2_stocks_value = 45      #条件2:5日涨幅 > cond2_stocks_value%
 # =============================================================================
 # 模块1：日线历史数据缓存下载（避免重复下载，提速启动）
 # =============================================================================
-# 缓存文件本地路径
-CACHE_FILE = r"C:\Users\15113\Desktop\QMT_Software\py\downloaded_stocks.json"
+
 # 集合存储已下载股票，查询O(1)速度
 DOWNLOADED_STOCKS = set()
+
+# 自动创建目录（防止不存在报错）
+def init_project_dir():
+    for path in [CACHE_PATH, CONFIG_PATH, LOG_PATH]:
+        os.makedirs(path, exist_ok=True)
 
 # 读取本地缓存文件
 if os.path.exists(CACHE_FILE):
@@ -127,6 +198,12 @@ def is_trade_time2(h, m):
 def is_trade_time3(h, m):
 # 早盘 09:30-9:46
     if h == 9 and m >= 30 and m <= 46:
+        return True 
+    return False
+
+def is_trade_time4(h, m):
+# 早盘 09:30-9:46
+    if h == 15 and m >= 30 and m <= 31:
         return True 
     return False
 # =============================================================================
@@ -1011,14 +1088,14 @@ def get_limit_up_threshold(code: str):
             return 1.098
 
 # 从文本读取三类股票代码
-def load_stock_from_txt(watch_list_path):
+def load_stock_from_txt(WATCH_LIST_PATH):
     cond1 = []
     cond2 = []
     cond3 = []
-    if not os.path.exists(watch_list_path):
+    if not os.path.exists(WATCH_LIST_PATH):
         return cond1, cond2, cond3
     try:
-        with open(watch_list_path, "r", encoding="utf-8") as f:
+        with open(WATCH_LIST_PATH, "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f.readlines() if line.strip()]
         flag = ""
         for line in lines:
@@ -1053,17 +1130,16 @@ def filter_strong_stocks_separate(pool):
     筛选结果同时输出控制台 + 写入固定路径WatchList.txt
     文件路径：C:/Users/15113/Desktop/QMT_Software/py/WatchList.txt
     """
-    # 使用原始字符串r"" 彻底规避路径转义问题
-    watch_list_path = r"C:\Users\15113\Desktop\QMT_Software\py\A_WatchList.txt"
+
     SECTOR_NAME = "强势股池" 
     # ========== WatchList.txt有内容直接停止所有筛选,暂时注释，放开之后get_market_data_ex会卡住 ==========
-    #if os.path.exists(watch_list_path):
+    #if os.path.exists(WATCH_LIST_PATH):
     #    try:
-    #        with open(watch_list_path, "r", encoding="utf-8") as f:
+    #        with open(WATCH_LIST_PATH, "r", encoding="utf-8") as f:
     #            txt_content = f.read().strip()
     #        if txt_content:
     #            print("✅ 检测到已有筛选列表，直接加载本地数据，跳过行情筛选")
-    #            c1, c2, c3 = load_stock_from_txt(watch_list_path)
+    #            c1, c2, c3 = load_stock_from_txt(WATCH_LIST_PATH)
     #            return c1, c2, c3
     #    except:
     #        pass
@@ -1130,7 +1206,7 @@ def filter_strong_stocks_separate(pool):
 
     # 写入本地WatchList.txt文件
     try:
-        with open(watch_list_path, "w", encoding="utf-8") as f:
+        with open(WATCH_LIST_PATH, "w", encoding="utf-8") as f:
             now_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             f.write(f"===== 强势股筛选列表 | 更新时间：{now_time} =====\n")
             f.write(f"强势股统计:条件1={len(cond1_stocks)}只 | 条件2={len(cond2_stocks)}只 | 条件3={len(cond3_stocks)}只\n\n")
@@ -1151,7 +1227,7 @@ def filter_strong_stocks_separate(pool):
                 f.write(f"  {c} | {name}\n")
 
             f.write("\n" + "="*35 + "\n")
-        print(f"✅ 筛选列表已写入文件：{watch_list_path}")
+        print(f"✅ 筛选列表已写入文件：{WATCH_LIST_PATH}")
 
     except Exception as e:
         print(f"❌ 写入WatchList.txt失败，错误信息：{str(e)}")
@@ -1343,9 +1419,8 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
     """
     # -------------------------- 1. 初始化日志文件 --------------------------
     # 日志文件路径：当前脚本同级目录Log_StrongStock.txt
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    log_path = os.path.join(current_dir, "Log_StrongStock.txt")
-    log_file = open(log_path, "a", encoding="utf-8")
+  
+    log_file = open(STRONG_LOG_PATH, "a", encoding="utf-8")
 
     # 全局状态缓存字典：{状态唯一标识: 当前触发布尔值}，仅状态变更打印日志
     last_status = {}
@@ -1446,26 +1521,29 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                 #write_log(f"【状态调试】{code} old_state={old_state} new_trigger={total_trigger}")
 
                 # 仅状态发生变化时写入日志，避免循环刷屏
-                if status_key not in last_status or last_status[status_key] != total_trigger:
-                    last_status[status_key] = total_trigger
+                #if status_key not in last_status or last_status[status_key] != total_trigger:
+                if status_key not in last_status:
+                    #last_status[status_key] = total_trigger
                     if total_trigger:
+                        last_status[status_key] = total_trigger
                         abs_draw = abs(drawdown)
-                        key_word = get_stock_reason_keyword(code, name, day_pct)
+                        # 固定4汉字宽度：超长截断，不足补空格
+                        short_name = name[:4]
+                        fixed_name = short_name.ljust(4, "　")
+
+                        key_word = get_stock_reason_keyword(code, name, day_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                        reason = get_stock_reason_keyword(code, name, day_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+                        append_abnormalreason_log(code, fixed_name, reason)
                         if branch1_trigger:
+                            save_stocks_to_position_txt(code, fixed_name)    #写入日志
                             
-                            # 固定4汉字宽度：超长截断，不足补空格
-                            short_name = name[:4]
-                            fixed_name1 = short_name.ljust(4, "　")
                             # 开盘10分钟后最大回撤
-                            content1 = f"⚠️ 【COND1-冲高跳水】{code:<12} {fixed_name1} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                            content1 = f"【COND1-冲高跳水】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                             write_log(content1)
-                        else:
-                            
-                            # 固定4汉字宽度：超长截断，不足补空格
-                            short_name = name[:4]
-                            fixed_name2 = short_name.ljust(4, "　")
+                        else:  
+                            save_stocks_to_position_txt(code, fixed_name)
                             # 开盘前10分钟快速回撤
-                            content2 = f"⚠️ 【COND1-开盘急跌】{code:<12} {fixed_name2} | 涨幅{day_pct:>5.1f}% | 快速回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                            content2 = f"【COND1-开盘急跌】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 快速回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                             write_log(content2)
 
             # ===================== 模块2：cond2 5日涨幅>cond2_stocks_value%龙头股 日内横盘监控（暂时屏蔽，不能删除） =====================
@@ -1483,7 +1561,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
             #    if status_key not in last_status or last_status[status_key] != flat_trigger:
             #        last_status[status_key] = flat_trigger
             #        if flat_trigger:
-            #            write_log(f"📊【COND2-龙头横盘】{code} {name} | 当前日内涨跌幅 {day_pct:.1f}%")
+            #            write_log(f"【COND2-龙头横盘】{code} {name} | 当前日内涨跌幅 {day_pct:.1f}%")
 
             # ===================== 模块3：cond3 涨停500亿大盘股 高开跳水监控 =====================
             for stock_code in cond3_stocks:
@@ -1507,22 +1585,28 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                 # 条件1：高开区间 6% ~ 10%
                 branch3_open_range = 6 <= open_pct <= 10
                 # 条件2：时间限制，仅开盘前5分钟9:30-9:35有效
-                branch3_time_ok = (hour == 9 and 30 <= minute <= 40)
+                branch3_time_ok = (hour == 9 and 30 <= minute <= 45)
                 # 完整触发条件
                 branch3_trigger = filter_only_cond3 and branch3_open_range and branch3_time_ok and drawdown_over6
                 status_key = f"COND3_{code}"
 
-                if status_key not in last_status or last_status[status_key] != branch3_trigger:
-                    last_status[status_key] = branch3_trigger
+                #if status_key not in last_status or last_status[status_key] != branch3_trigger:
+                if status_key not in last_status:
+                    #last_status[status_key] = branch3_trigger
                     if branch3_trigger:
-                        abs_draw = abs(drawdown)
-                        key_word = get_stock_reason_keyword(code, name, day_pct)
-
+                        last_status[status_key] = branch3_trigger
                         # 固定4汉字宽度：超长截断，不足补空格
                         short_name = name[:4]
                         fixed_name = short_name.ljust(4, "　")
+
+                        abs_draw = abs(drawdown)
+                        key_word = get_stock_reason_keyword(code, name, day_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                        reason = get_stock_reason_keyword(code, name, day_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+                        append_abnormalreason_log(code, fixed_name, reason)
+
+                        save_stocks_to_position_txt(code, fixed_name)
                         #开盘前10分钟最大回撤
-                        content = f"↘️【COND3-涨停急跌】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
+                        content = f"【COND3-涨停急跌】{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 最大回撤{abs_draw:>5.1f}% | 关键词：{key_word}"
                         write_log(content)
 
         except Exception:
@@ -1542,8 +1626,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
 COMMON_DRAWDOWN_THRESHOLD = -6.0   # 回撤大于6%触发
 # 记录普通个股上次触发状态，防刷屏
 COMMON_STOCK_LAST_STATUS = dict()
-# 普通个股回撤日志单独追加，也可共用Log_StrongStock.txt
-COMMON_DRAWDOWN_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Log_CommonDrawdown.txt")
+
 def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_running):
     """
     独立后台线程
@@ -1580,7 +1663,7 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
         curr_min = now_dt.minute
         # 只在交易时段监控
         if not is_trade_time(curr_hour, curr_min):
-            continue
+           continue
         
         try:
             # 合并三类强势股集合
@@ -1600,30 +1683,41 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                 high_price = tick_info["high"]
                 drawdown = tick_info["drawdown"]
                 day_pct = tick_info["day_pct"]
-                today_amount = tick_info["amount"]               
+                today_amount = tick_info["amount"] 
+                            
                 # 成交额大于20亿
                 if not (20 * 10**8 < today_amount):
                     continue
+
+                open_pct = tick_info["open_pct"]  
+                # 开盘涨跌幅
+                open_zdf_2pct = open_pct > -2
 
                 # 新增条件：最高价大于开盘价6%
                 high_over_open_5pct = high_price > open_price * 1.06
                 # 回撤大于6%
                 draw_down_enough = drawdown < COMMON_DRAWDOWN_THRESHOLD               
                 # 双重条件同时满足才触发
-                trigger = high_over_open_5pct and draw_down_enough              
+                trigger = high_over_open_5pct and draw_down_enough and open_zdf_2pct            
                 key = f"COMMON_{code}"
 
                 # 仅状态变化写入日志
-                if key not in COMMON_STOCK_LAST_STATUS or COMMON_STOCK_LAST_STATUS[key] != trigger:
-                    COMMON_STOCK_LAST_STATUS[key] = trigger
+                #if key not in COMMON_STOCK_LAST_STATUS or COMMON_STOCK_LAST_STATUS[key] != trigger:
+                if key not in COMMON_STOCK_LAST_STATUS :
+                    #COMMON_STOCK_LAST_STATUS[key] = trigger
                     if trigger:
-                        key_word = get_stock_reason_keyword(code, name, day_pct)
-                        abs_down = abs(drawdown)
-
+                        COMMON_STOCK_LAST_STATUS[key] = trigger
                         # 固定4汉字宽度：超长截断，不足补空格
                         short_name = name[:4]
                         fixed_name = short_name.ljust(4, "　")
-                        content = f"【📉 容量冲高回落】{code:<12} {fixed_name} | 日内涨幅{day_pct:>6.1f}% | 最高回撤{abs_down:>6.1f}% | 关键词：{key_word}"
+                        # 获取股票关键字
+                        key_word = get_stock_reason_keyword(code, name, day_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                        reason = get_stock_reason_keyword(code, name, day_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+                        append_abnormalreason_log(code, fixed_name, reason)
+                        abs_down = abs(drawdown)
+
+                        save_stocks_to_position_txt(code, fixed_name)
+                        content = f"【容量冲高回落】{code:<12} {fixed_name} | 日内涨幅{day_pct:>6.1f}% | 最高回撤{abs_down:>6.1f}% | 关键词：{key_word}"
                         write_common_log(content)
 
         except Exception:
@@ -1636,12 +1730,69 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
     except:
         pass
 
-# 持仓股监控配置
-POSITION_STOCK_TXT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "A_Position_Stock.txt")
+
 # 持仓计时状态存储
 POSITION_TIMER_MAP = dict()
+def get_exist_codes():
+    """获取文件里已存在的所有股票代码"""
+    exist_codes = set()
+    if not os.path.exists(POSITION_STOCK_TXT):
+        return exist_codes
+    try:
+        with open(POSITION_STOCK_TXT, "r", encoding="utf-8") as f:
+            for line in f.readlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                code = line.split()[0]
+                if "." in code:
+                    exist_codes.add(code)
+    except:
+        pass
+    return exist_codes
+
+
+def save_stocks_to_position_txt(code, name, append=True):
+    """
+    单个传入代码、名称写入position_stock.txt
+    :param code: 股票完整代码 如 000001.SZ
+    :param name: 股票名称
+    :param append: True追加写入 / False覆盖写入
+    """
+    code = code.strip()
+    name = name.strip()
+    if "." not in code:
+        print("❌ 股票代码格式错误")
+        return
+
+    exist_set = get_exist_codes()
+    # 覆盖模式直接写入，不判重
+    if not append:
+        mode = "w"
+        try:
+            with open(POSITION_STOCK_TXT, mode=mode, encoding="utf-8") as f:
+                f.write(f"{code} {name}\n")
+            print(f"✅ 覆盖写入成功：{code} {name}")
+        except Exception as e:
+            print(f"❌ 写入持仓文件失败：{e}")
+        return
+
+    # 追加模式：判断重复
+    if code in exist_set:
+        print(f"⚠️ {code} {name} 已存在，跳过重复写入")
+        return
+
+    # 不存在则追加
+    try:
+        with open(POSITION_STOCK_TXT, mode="a", encoding="utf-8") as f:
+            f.write(f"{code} {name}\n")
+        print(f"✅ 追加写入成功：{code} {name}")
+    except Exception as e:
+        print(f"❌ 写入持仓文件失败：{e}")
+
+
 def load_position_stocks():
-    """从txt加载持仓股票代码，加载完成打印代码+名称确认"""
+    """从txt加载持仓股票代码，只返回纯代码列表"""
     pos_list = []
     if not os.path.exists(POSITION_STOCK_TXT):
         print("⚠️ 未找到持仓股配置文件 position_stock.txt")
@@ -1654,24 +1805,14 @@ def load_position_stocks():
             if not line or line.startswith("#"):
                 continue
             if "." in line:
-                pos_list.append(line)
+                # 只截取股票代码，丢弃名称
+                code = line.split()[0]
+                pos_list.append(code)
     except Exception as e:
         print(f"❌ 读取持仓文件失败：{e}")
         return pos_list
 
-    # 加载完成后输出列表确认
-    if pos_list:
-        print("\n======= 已加载持仓监控股票 =======")
-        for code in pos_list:
-            try:
-                name = xtdata.get_instrument_detail(code).get("InstrumentName", "未知名称")
-                print(f"{code}  |  {name}")
-            except:
-                print(f"{code}  |  获取名称失败")
-        print("===================================\n")
-    else:
-        print("ℹ️ 持仓文件内无有效监控股票")
-
+    # 最终只返回纯代码列表
     return pos_list
 
 def position_avg_price_monitor(is_running):
@@ -1686,7 +1827,7 @@ def position_avg_price_monitor(is_running):
     6. 一旦现价重新站上均价 → 清空计时，等待下次跌破重新计时
     7. 提示同时输出终端 + 写入日志文件
     """
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Log_PositionStock.txt")
+    
 
     # 统一日志函数：终端打印 + 文件写入
     def write_pos_log(msg):
@@ -1696,17 +1837,20 @@ def position_avg_price_monitor(is_running):
         print(full_msg)
         # 写入本地日志文件
         try:
-            with open(log_path, "a", encoding="utf-8") as f:
+            with open(POSITION_LOG_PATH, "a", encoding="utf-8") as f:
                 f.write(full_msg + "\n")
         except Exception:
             pass
 
     write_pos_log("========== 持仓股均价风控监控线程启动 ==========")
-    # 加载持仓列表
-    pos_codes = load_position_stocks()
+    
+    
     while is_running[0]:
         THREAD_HEARTBEAT["position_monitor"] = datetime.now()
         
+        # 加载持仓列表
+        pos_codes = load_position_stocks()
+
         if not pos_codes:
             time.sleep(2)
             continue
@@ -1718,13 +1862,20 @@ def position_avg_price_monitor(is_running):
         # 只在交易时段监控
         if not is_trade_time(curr_hour, curr_min):
             continue
-        
+
+        time.sleep(2)
+        write_pos_log(f"------------------------------------")
         for code in pos_codes:
             tick = parse_tick_info(code)
             if not tick:
                 continue
-            
-            code_name = f"{code} {tick['name']}"
+
+            # 固定4汉字宽度：超长截断，不足补空格
+            name = tick['name']
+            short_name = name[:4]
+            fixed_name = short_name.ljust(4, "　")
+
+            code_name = f"{code} {fixed_name}"
             now_price = tick["now"]
 
             # ========== 正确计算日内成交均价 ==========
@@ -1739,16 +1890,17 @@ def position_avg_price_monitor(is_running):
             now_price = tick["now"]
             pre_close = tick["pre_close"]
             today_pct = (now_price - pre_close) / pre_close
-            write_pos_log(f"【🟢 持仓股涨跌幅】{code_name} 日内涨跌幅 {today_pct:.2%}%")
-            # 只在交易时段监控
-            if not is_trade_time3(curr_hour, curr_min):
+            write_pos_log(f"【{code_name}】 涨跌幅 {today_pct:.2%}")
+            
+            # 只在交易时段监控，下面的逻辑目前先不执行
+            if not is_trade_time4(curr_hour, curr_min):
                 continue
 
             # 现价站上均价 清除计时
             if now_price >= avg_price:
                 if code in POSITION_TIMER_MAP:
                     del POSITION_TIMER_MAP[code]
-                    write_pos_log(f"【🟢 持仓风控提醒】{code_name} 现价站上日内均价，取消下跌计时")
+                    write_pos_log(f"【持仓风控提醒】{code_name} 现价站上日内均价，取消下跌计时")
                 continue
 
             # 首次跌破均价 初始化计时
@@ -1759,7 +1911,7 @@ def position_avg_price_monitor(is_running):
                     "tip_all": False,
                     "last_tip_time": now_dt
                 }
-                write_pos_log(f"【🟡 持仓风控提醒】{code_name} 现价跌破日内均价，开始下跌计时")
+                write_pos_log(f"【持仓风控提醒】{code_name} 现价跌破日内均价，开始下跌计时")
 
             timer_info = POSITION_TIMER_MAP[code]
             # 计算跌破持续分钟数
@@ -1767,13 +1919,13 @@ def position_avg_price_monitor(is_running):
 
             # 跌破满5分钟 提示卖出一半
             if dur_min >= 5 and not timer_info["tip_half"]:
-                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已5分钟，建议卖出一半")
+                write_pos_log(f"【持仓风控提醒】{code_name} 跌破均价已5分钟，建议卖出一半")
                 timer_info["tip_half"] = True
                 timer_info["last_tip_time"] = now_dt
 
             # 跌破满10分钟 提示全部清仓
             elif dur_min >= 10 and not timer_info["tip_all"]:
-                write_pos_log(f"【🔴 持仓风控提醒】{code_name} 跌破均价已10分钟，建议全部清仓")
+                write_pos_log(f"【持仓风控提醒】{code_name} 跌破均价已10分钟，建议全部清仓")
                 timer_info["tip_all"] = True
                 timer_info["last_tip_time"] = now_dt
 
@@ -1781,16 +1933,26 @@ def position_avg_price_monitor(is_running):
             elif dur_min >= 10:
                 gap_min = (now_dt - timer_info["last_tip_time"]).total_seconds() / 60
                 if gap_min >= 5:
-                    write_pos_log(f"【🔴 持仓持续弱势】{code_name} 长期低于均价运行，持续规避风险")
+                    write_pos_log(f"【持仓持续弱势】{code_name} 长期低于均价运行，持续规避风险")
                     timer_info["last_tip_time"] = now_dt
 
         time.sleep(2)
 
     write_pos_log("========== 持仓股均价风控监控线程停止 ==========\n")
 
+def split_and_save_log(key_word: str):
+    if "|" not in key_word:
+        return "未知", "未知"
+    word, reason = key_word.split("|", 1)
+    word = word.strip()
+    reason = reason.strip()
+    
+    return word, reason
 
 # 全局去重集合
 VOL_START_NOTICE_SET = set()
+# 全局状态缓存字典：{状态唯一标识: 当前触发布尔值}，仅状态变更打印日志
+last_volume_break_status = {}
 def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """
     首次放量启动监视线程
@@ -1805,7 +1967,7 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
     """
     # 合并排除集合
     exclude_set = set(cond1_stocks) | set(cond2_stocks) | set(cond3_stocks)
-    VOL_BREAK_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Log_VolPriceBreak.txt")
+    
     def write_vol_log(msg):
         """日志写入函数"""
         t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1847,7 +2009,11 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 now_price = tick["now"]
                 pre_close = tick["pre_close"]
                 today_amount = tick["amount"]
-                
+                open_pct = tick["open_pct"]  
+                # 开盘涨跌幅小于-2%
+                if open_pct < -2:
+                    continue
+
                 # 今日涨幅 11%~16%
                 if pre_close <= 0:
                     continue
@@ -1875,25 +2041,31 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 three_day_total_pct = (now_price - close_3d_ago) / close_3d_ago
                 if three_day_total_pct >= 0.20:
                     continue
-                
-                key_word = get_stock_reason_keyword(code, name, today_pct)
-                # 条件全部满足 终端+日志同步输出
-                #content = f"【🚀 右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，| 关键词：{key_word}"
-
-                
                 # 固定4汉字宽度：超长截断，不足补空格
                 short_name = name[:4]
                 fix_name = short_name.ljust(4, "　")
-                # 整条拼接对齐格式
-                content = (
-                    f"【🚀 右侧放量启动】{code:<12} {fix_name} "
-                    f"| 日内涨幅{today_pct:>7.2%} "
-                    f"| 三日涨幅{three_day_total_pct:>7.2%} "
-                    f"| 关键词：{key_word}"
-                )
 
-                write_vol_log(content)
-                VOL_START_NOTICE_SET.add(code)
+                key_word = get_stock_reason_keyword(code, name, today_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                reason = get_stock_reason_keyword(code, name, today_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+                append_abnormalreason_log(code, fix_name, reason)
+                
+                # 条件全部满足 终端+日志同步输出
+                #content = f"【右侧放量启动】{code} {name} | 日内涨幅{today_pct:.2%} | 三日涨幅{three_day_total_pct:.2%}，| 关键词：{word}"
+                key = f"COMMON_{code}"
+                if key not in last_volume_break_status:
+                    last_volume_break_status[key] = True
+
+                    save_stocks_to_position_txt(code, fix_name)
+                    # 整条拼接对齐格式
+                    content = (
+                        f"【右侧放量启动】{code:<12} {fix_name} "
+                        f"| 日内涨幅{today_pct:>7.2%} "
+                        f"| 三日涨幅{three_day_total_pct:>7.2%} "
+                        f"| 关键词：{key_word}"
+                    )
+
+                    write_vol_log(content)
+                    VOL_START_NOTICE_SET.add(code)
 
             except Exception:
                 continue
@@ -1922,9 +2094,13 @@ def get_watch_stock_list(file_path):
     return stock_list
 
 def append_strength_log(msg):
-    log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Log_StockStrengthYesterday.txt")
-    with open(log_file, "a", encoding="utf-8") as fw:
+    with open(YESTERDAY_STRENGTH_LOG, "a", encoding="utf-8") as fw:
         fw.write(msg + "\n")
+
+def append_abnormalreason_log(code, name, reason):
+    # 写入日志
+    with open(ABNORMALREASON_LOG, "a", encoding="utf-8") as f:
+        f.write(f"【{code} {name}】 {reason}\n")
 
 # 改用你自己封装的tick解析函数获取涨跌幅
 def get_single_stock_rise(stock_code):
@@ -1942,9 +2118,8 @@ def get_single_stock_rise(stock_code):
     
 # 对齐版  
 def stock_group_strength_monitor():
-    base_path = os.path.dirname(os.path.abspath(__file__))
-    file_break = os.path.join(base_path, "B_VolPriceBreak.txt")
-    file_drawdown = os.path.join(base_path, "B_CommonDrawdown.txt")
+
+    
     append_strength_log("========== 昨日筛选股票强度监控线程启动 ==========")
     while True:
 
@@ -1956,8 +2131,8 @@ def stock_group_strength_monitor():
         if not is_trade_time(curr_hour, curr_min):
             continue
 
-        break_stocks = get_watch_stock_list(file_break)
-        down_stocks = get_watch_stock_list(file_drawdown)
+        break_stocks = get_watch_stock_list(FILE_BREAK)
+        down_stocks = get_watch_stock_list(FILE_DRAWDOWN)
         now_time = time.strftime("%Y-%m-%d %H:%M", time.localtime())
 
         # 放量突破组 排序逻辑不变
@@ -2031,13 +2206,7 @@ def parse_log_stock_filter_with_name():
     3. 写入：代码  名称
     4. 前置判断：目标文件已有内容则直接退出不重写
     """
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    # 日志文件
-    log_vol_path = os.path.join(base_dir, "Log_VolPriceBreak.txt")
-    log_down_path = os.path.join(base_dir, "Log_CommonDrawdown.txt")
-    # 输出文件
-    out_vol_path = os.path.join(base_dir, "B_VolPriceBreak.txt")
-    out_down_path = os.path.join(base_dir, "B_CommonDrawdown.txt")
+
 
     # ========== 最前面新增判断：目标文件存在且有内容，直接返回不执行 ==========
     def file_has_content(file_path):
@@ -2049,7 +2218,7 @@ def parse_log_stock_filter_with_name():
         except:
             return False
 
-    if file_has_content(out_vol_path) and file_has_content(out_down_path):
+    if file_has_content(FILE_BREAK) and file_has_content(FILE_DRAWDOWN):
         print("📄 目标整理文件已有数据，无需重复生成，直接跳过")
         return
     # ======================================================================
@@ -2073,8 +2242,8 @@ def parse_log_stock_filter_with_name():
         return s
 
     # 读取两组 (code, name)
-    vol_set = read_code_name_set(log_vol_path)
-    down_set = read_code_name_set(log_down_path)
+    vol_set = read_code_name_set(VOL_BREAK_LOG_PATH)
+    down_set = read_code_name_set(COMMON_DRAWDOWN_LOG_PATH)
 
     # 只按 code 去重（名称跟着 code 走）
     vol_codes = {c for c, n in vol_set}
@@ -2087,12 +2256,12 @@ def parse_log_stock_filter_with_name():
     all_down = [(c, n) for c, n in down_set]
 
     # 写入 VolPriceBreak.txt
-    with open(out_vol_path, "w", encoding="utf-8") as f:
+    with open(FILE_BREAK, "w", encoding="utf-8") as f:
         for c, n in sorted(pure_vol):
             f.write(f"{c} {n}\n")
 
     # 写入 CommonDrawdown.txt
-    with open(out_down_path, "w", encoding="utf-8") as f:
+    with open(FILE_DRAWDOWN, "w", encoding="utf-8") as f:
         for c, n in sorted(all_down):
             f.write(f"{c} {n}\n")
 
@@ -2104,7 +2273,7 @@ def parse_log_stock_filter_with_name():
 
 def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
-    #key_word = get_stock_reason_keyword("600206.SH", "有研新材", 8.19)
+    #key_word = get_stock_reason_keyword("301269.SZ", "华大九天", 14.05)
     #print(key_word)
 
     is_running = [True]
@@ -2122,7 +2291,9 @@ def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     time.sleep(0.5)
     #启动昨日筛选股票监控线程，打印到日志，全天
     threading.Thread(target=stock_group_strength_monitor, daemon=True).start()
+    #监控资金流向，板块概念
     
+
     print("✅ 该版本没有板块刷新/强势股监控/订单流分析")
     
     try:
@@ -2202,17 +2373,14 @@ CACHE_EXPIRE = 300
 REQ_TIMEOUT = 10   
 
 def get_deepseek_api_key():
-    # 获取当前py脚本所在目录
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    # 拼接同级txt配置文件
-    txt_path = os.path.join(base_dir, "api_config.txt")
+  
     
-    if not os.path.exists(txt_path):
-        print("⚠️ 同级目录未找到 api_config.txt 配置文件")
+    if not os.path.exists(CONFIG_TXT):
+        print("⚠️ 同级目录未找到 config.txt 配置文件")
         return ""
     
     try:
-        with open(txt_path, "r", encoding="utf-8") as f:
+        with open(CONFIG_TXT, "r", encoding="utf-8") as f:
             for line in f.readlines():
                 line = line.strip()
                 if line.startswith("DEEPSEEK_API_KEY="):
@@ -2221,8 +2389,7 @@ def get_deepseek_api_key():
         print(f"⚠️ 读取配置失败：{e}")
     return ""
 
-# 同步底层请求
-def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
+def deepseek_search_stock(stock_code: str, stock_name: str, rise_pct: float) -> str:
     prompt = f"""
 【身份】你是A股盘口分析师，只信今日真实财经新闻，拒绝编造。
 【任务】只找【{stock_name}({stock_code})】今日{rise_pct}%大涨的**真实催化概念和题材**。
@@ -2262,16 +2429,111 @@ def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
             return word if word else "未知"
     except Exception:
         return "未知"
+
+def get_qwen_api_key():
+    if not os.path.exists(CONFIG_TXT):
+        print("⚠️ 同级目录未找到 config.txt 配置文件")
+        return ""
+    
+    try:
+        with open(CONFIG_TXT, "r", encoding="utf-8") as f:
+            content = f.read()
+            # 先清空所有空白换行，再逐行匹配
+            lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+            for line in lines:
+                if line.startswith("DASHSCOPE_API_KEY="):
+                    # 只分割第一个等号，取出后面全部
+                    raw_key = line.split("=", 1)[1]
+                    # 清除所有隐形空白字符
+                    valid_key = raw_key.replace(" ", "").replace("\t", "").strip()
+                    return valid_key
+    except Exception as e:
+        print(f"⚠️ 读取配置失败：{e}")
+    return ""
+
+
+DASHSCOPE_API_KEY = get_qwen_api_key()
+dashscope.api_key = DASHSCOPE_API_KEY
+os.environ["DASHSCOPE_API_KEY"] = DASHSCOPE_API_KEY
+
+def qwen_search_stock(stock_code: str, stock_name: str, rise_pct: float) -> str:
+    # 固定今日日期，保证每次调用都带对日期
+    today = "2026年07月07日"
+
+    system_prompt = f"""
+你是A股全网实时行情分析师，专门查找个股今日异动（大涨/大跌）的真实原因。
+- 搜索范围：**全网所有实时财经新闻、公告、研报、论坛、资金流向**，不限于特定网站
+- 时间范围：**仅限 {today} 当日发生的事件、消息、数据**
+- 输出要求：用**1-3句通顺中文**总结真实原因，直接说事实，不要格式、不要标签、不要多余解释
+- 找不到可靠原因就直接返回：暂无公开异动原因
+""".strip()
+
+    user_prompt = f"""
+{today} 个股异动查询：{stock_name}（{stock_code}）今日涨幅 {rise_pct}%。
+请全网查找今日导致该股异动的真实原因，只看今日实时信息，直接用一段话说明原因。
+""".strip()
+
+    # 重试 3 次，提升稳定性
+    for attempt in range(3):
+        try:
+            rsp = Generation.call(
+                model="qwen-plus",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                result_format="message",
+                enable_search=True,                # 开启联网搜索
+                search_options={
+                    "forced_search": True,         # 强制搜索，不依赖模型判断
+                    "search_strategy": "max",      # 最多返回10条，提高命中率
+                    "time_range": "1d"              # 限定1天内，精准锁定今日
+                },
+                temperature=0.1,                    # 低随机性，更贴合事实
+                max_tokens=512,                     # 足够长度说清原因
+                timeout=12000                       # 超时12秒，给足搜索时间
+            )
+
+            # 校验返回有效
+            if rsp.status_code == HTTPStatus.OK and rsp.output.choices:
+                res = rsp.output.choices[0].message.content.strip()
+                # 简单过滤空/过短结果
+                if len(res) > 5:
+                    return res
+
+        except Exception as e:
+            print(f"⚠️ 调用异常（重试{attempt+1}/3）：{e}")
+        time.sleep(2)  # 重试前休眠，避免频率过高
+
+    # 三次失败兜底
+    return f"{today}｜暂无公开异动原因"
+
+
+# 同步底层请求
+def _sync_get_keyword(stock_code: str, stock_name: str, rise_pct: float, index: int) -> str:
+    
+    if index == 1:
+        key = deepseek_search_stock(stock_code, stock_name, rise_pct)
+    elif index == 2:
+        key = qwen_search_stock(stock_code, stock_name, rise_pct)
+    else:
+        key = ""
+    return key
+
+
     
 # 异步封装
-async def async_get_rise_keyword(stock_code: str, stock_name: str, rise_pct: float) -> str:
+async def async_get_rise_keyword(stock_code: str, stock_name: str, rise_pct: float, index: int ) -> str:
+    
     now_ts = time.time()
-    if stock_code in LLM_CACHE:
-        word, t = LLM_CACHE[stock_code]
+    cache_key = f"{stock_code}_{index}"
+    if cache_key in LLM_CACHE:
+        word, t = LLM_CACHE[cache_key]
         if now_ts - t < CACHE_EXPIRE:
             return word
+        
     loop = asyncio.get_running_loop()
-    word = await loop.run_in_executor(None, _sync_get_keyword, stock_code, stock_name, rise_pct)
+    word = await loop.run_in_executor(None, _sync_get_keyword, stock_code, stock_name, rise_pct, index)
     LLM_CACHE[stock_code] = (word, now_ts)
     return word
 
@@ -2281,14 +2543,17 @@ def clear_llm_cache():
 
 
 # 同步封装函数，随便在哪调用都能用
-def get_stock_reason_keyword(code, name, rise):
-    return asyncio.run(async_get_rise_keyword(code, name, rise))
+def get_stock_reason_keyword(code, name, rise, index):
+    
+    return asyncio.run(async_get_rise_keyword(code, name, rise, index))
 
 # =============================================================================
 # 程序入口主函数（一键启动全部流程）
 # =============================================================================
 if __name__ == "__main__":
     try:
+        # 0. 初始化调用
+        init_project_dir()
         # 1. 启动MiniQMT交易API
         trade_robot.start()
         time.sleep(1)

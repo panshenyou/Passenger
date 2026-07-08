@@ -15,6 +15,7 @@ LOG_POLL_INTERVAL = 0.2            # 日志文件读取轮询间隔(秒)
 CHART_REFRESH_INTERVAL = 0.3       # 分时图表后台刷新间隔(秒)
 CHART_PADDING = 30                 # 图表上下左右内边距
 LINE_WIDTH = 0.5                   # 行情线条统一宽度
+ABNORMAL_LOG_MIN_HEIGHT = 130       # 异常原因日志最小高度
 
 # 悬浮信息提示窗配色
 TIP_BG_COLOR = "#111111"
@@ -32,16 +33,18 @@ AFTER_START = 780      # 13:00
 AFTER_END = 900        # 15:00
 
 # ====================== 日志文件路径配置 ======================
-# 获取当前脚本所在目录，所有日志文件统一存放在同级目录
-SCRIPT_DIR = os.path.dirname(os.path.abspath(sys.argv[0]))
 
+# 项目根目录
+QMT_PROJECT_ROOT = r"C:\Users\15113\Desktop\QMT_Software\py_strategy"
+SCRIPT_DIR = os.path.join(QMT_PROJECT_ROOT, "log")
 # 日志名称与窗口区域映射
 LOG_FILE_NAME_MAP = {
-    "t1": "Log_PositionStock.txt",          # t1窗口：持仓监控区日志
+    "t1": "Log_PositionStock.txt",          # t1窗口：异动涨跌区日志
     "t2": "Log_CommonDrawdown.txt",        # t2窗口：冲高回落区日志
     "t3": "Log_StockStrengthYesterday.txt", # t3窗口：昨日筛选区(分时图数据源)
     "t4": "Log_VolPriceBreak.txt",          # t4窗口：量价齐升区日志
-    "t5": "Log_StrongStock.txt"            # t5窗口：强势监控区日志
+    "t5": "Log_StrongStock.txt",            # t5窗口：强势监控区日志
+    "t6": "Log_AbnormalReason.txt"          # t6窗口：异动原因特殊监控区
 }
 
 # 拼接为绝对路径
@@ -112,7 +115,7 @@ class QuantLogPanel:
         style.map("TScrollbar", background=[("active", BG_COLOR), ("pressed", BG_COLOR)])
 
         # ====================== 整体布局搭建 ======================
-        # 垂直大布局：上两层日志 + 下层日志+图表
+        # 垂直大布局：上层日志 + 中层日志 + 下层日志图表 + 最底异动原因区
         self.main_pane = ttk.PanedWindow(root, orient=tk.VERTICAL)
         self.main_pane.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
@@ -120,10 +123,10 @@ class QuantLogPanel:
         self.top_pane = ttk.PanedWindow(self.main_pane, orient=tk.HORIZONTAL)
         self.main_pane.add(self.top_pane, weight=2)
 
-        # 左侧：持仓监控区
+        # 左侧：异动监控区
         f1 = tk.Frame(self.top_pane, bg=BG_COLOR, bd=0)
         self.top_pane.add(f1, weight=1)
-        tk.Label(f1, text="持仓监控区", fg=FG_COLOR, bg=BG_COLOR,
+        tk.Label(f1, text="异动涨跌区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t1 = tk.Text(f1, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
                           insertbackground=CURSOR_COLOR, wrap=tk.CHAR, bd=0, relief=tk.FLAT)
@@ -134,7 +137,7 @@ class QuantLogPanel:
 
         # 右侧：冲高回落区
         f2 = tk.Frame(self.top_pane, bg=BG_COLOR, bd=0)
-        self.top_pane.add(f2, weight=1)
+        self.top_pane.add(f2, weight=3)
         tk.Label(f2, text="冲高回落区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t2 = tk.Text(f2, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
@@ -162,7 +165,7 @@ class QuantLogPanel:
 
         # 右侧：量价齐升区
         f4 = tk.Frame(self.mid_pane, bg=BG_COLOR, bd=0)
-        self.mid_pane.add(f4, weight=1)
+        self.mid_pane.add(f4, weight=3)
         tk.Label(f4, text="量价齐升区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t4 = tk.Text(f4, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
@@ -198,6 +201,20 @@ class QuantLogPanel:
         self.chart_canvas = tk.Canvas(chart_frame, bg=CHART_BG, bd=0, highlightthickness=0)
         self.chart_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.chart_canvas.bind("<Configure>", self.on_chart_resize)  # 窗口缩放重绘图表
+
+        # ========== 新增最底部：异动原因特殊监控区 高度最小不挤压其他区域 ==========
+        abnormal_frame = tk.Frame(self.main_pane, bg=BG_COLOR, height=ABNORMAL_LOG_MIN_HEIGHT)
+        self.main_pane.add(abnormal_frame, weight=0)
+        abnormal_frame.pack_propagate(False) # 固定最小高度
+
+        tk.Label(abnormal_frame, text="通义千问异动原因", fg=FG_COLOR, bg=BG_COLOR,
+                 font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
+        self.t6 = tk.Text(abnormal_frame, font=("Consolas", LOG_FONT_SIZE), bg="#050505", fg=FG_COLOR,
+                          insertbackground=CURSOR_COLOR, wrap=tk.CHAR, bd=0, relief=tk.FLAT)
+        self.t6.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=2)
+        s6 = ttk.Scrollbar(abnormal_frame, command=self.t6.yview)
+        s6.pack(side=tk.RIGHT, fill=tk.Y)
+        self.t6.config(yscrollcommand=s6.set)
 
         # 绑定各类事件
         self.bind_scroll_event()        # 日志手动滚动事件
@@ -478,7 +495,7 @@ class QuantLogPanel:
 
     def bind_scroll_event(self):
         """绑定鼠标滚轮事件，标记手动浏览状态"""
-        boxes = [self.t1, self.t2, self.t3, self.t4, self.t5]
+        boxes = [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]
         def cb(e):
             self.manual_view = True
             self.last_scroll_time = time.time()
@@ -501,10 +518,10 @@ class QuantLogPanel:
     def bind_drag_event(self):
         """拖拽分割栏时临时禁用日志编辑"""
         def start(_):
-            for w in [self.t1, self.t2, self.t3, self.t4, self.t5]:
+            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]:
                 w.config(state=tk.DISABLED)
         def end(_):
-            for w in [self.t1, self.t2, self.t3, self.t4, self.t5]:
+            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]:
                 w.config(state=tk.NORMAL)
         for p in [self.top_pane, self.mid_pane, self.main_pane]:
             p.bind("<ButtonPress-1>", start)
@@ -516,10 +533,11 @@ class QuantLogPanel:
     def log_market(self, msg):self.safe_append_log(self.t3, msg)
     def log_position(self, msg):self.safe_append_log(self.t4, msg)
     def log_system(self, msg):self.safe_append_log(self.t5, msg)
+    def log_abnormal(self, msg):self.safe_append_log(self.t6, msg)
 
     def get_text_widget(self, k):
         """根据key获取对应日志文本框"""
-        m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5}
+        m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5,"t6":self.t6}
         return m.get(k)
 
     def single_file_monitor(self, key, path):
@@ -630,5 +648,9 @@ if __name__ == "__main__":
     # 开启模拟数据测试(注释则关闭)
     # threading.Thread(target=mock_market_data_writer, daemon=True).start()
 
-    # 启动主循环
-    root.mainloop()
+    # 启动主循环，捕获Ctrl+C中断
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        print("\n[INFO] 收到键盘中断，正在退出程序...")
+        on_close()
