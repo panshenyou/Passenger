@@ -94,7 +94,7 @@ ABNORMALREASON_LOG = os.path.join(LOG_PATH, "Log_AbnormalReason.txt")
 CONFIG_TXT = os.path.join(CONFIG_PATH, "Config.txt")
 POSITION_STOCK_TXT = os.path.join(CONFIG_PATH, "Position_Stock.txt")
 
-#大模型
+#大模型 1-deepseek  2-qwen
 DEEPSEEK_INDEX = 1
 QWEN_INDEX = 2
 
@@ -205,6 +205,19 @@ def is_trade_time4(h, m):
 # 早盘 09:30-9:46
     if h == 15 and m >= 30 and m <= 31:
         return True 
+    return False
+
+def is_trade_time5(h, m):
+    # 早盘 10:00-
+    if 10 < h < 11:
+        return True
+    if h == 11 and m <= 30:
+        return True
+    # 午盘 13:00-15:00
+    if 13 <= h < 15:
+        return True
+    if h == 15 and m == 0:
+        return True
     return False
 # =============================================================================
 # 模块2：全局单例行情数据中心（统一缓存所有Tick/逐笔/委托/计算结果）
@@ -1414,7 +1427,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
         分支1：开盘区间-2%~+7%，开盘后冲高超开盘5%、前10分钟最低价未跌破开盘，9:40之后检测回撤
         分支2：开盘区间-2%~+9.8%，个股在cond1，不在cond3池，仅9:30-9:40前10分钟检测回撤
     2. cond2龙头横盘告警：日内涨跌幅维持-2%~+2%，状态变化记录, 暂时屏蔽
-    3. cond3涨停大盘股高开跳水告警：开盘6%~10%，仅9:30-9:40前10分钟回撤>6%触发
+    3. cond3涨停大盘股高开跳水告警：开盘5%~10%，仅9:30-9:45前15分钟回撤>6%触发
     日志新增：每条信号附带当前日内实时涨幅
     """
     # -------------------------- 1. 初始化日志文件 --------------------------
@@ -1448,6 +1461,11 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
         THREAD_HEARTBEAT["strong_monitor"] = datetime.now()
         now_day = datetime.now().strftime("%Y%m%d")
 
+        now_dt = datetime.now()
+        # 直接取系统当前交易时间
+        curr_hour = now_dt.hour
+        curr_min = now_dt.minute
+        
         # 跨交易日自动清空开盘10分钟低价缓存，防止隔夜旧数据干扰判断
         if now_day != cache_date:
             stock_10min_low.clear()
@@ -1547,21 +1565,46 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                             write_log(content2)
 
             # ===================== 模块2：cond2 5日涨幅>cond2_stocks_value%龙头股 日内横盘监控（暂时屏蔽，不能删除） =====================
-            #for stock_code in cond2_stocks:
-            #    tick_info = parse_tick_info(stock_code)
-            #    if tick_info is None:
-            #        continue
-            #    code = tick_info["code"]
-            #    name = tick_info["name"]
-            #    day_pct = tick_info["day_pct"]  # 日内实时涨幅
-                # 横盘条件：日内涨跌幅稳定在-2% ~ +2%
-            #    flat_trigger = -2 < day_pct < 2
-            #    status_key = f"COND2_{code}"
+            for stock_code in cond2_stocks:
 
-            #    if status_key not in last_status or last_status[status_key] != flat_trigger:
-            #        last_status[status_key] = flat_trigger
-            #        if flat_trigger:
-            #            write_log(f"【COND2-龙头横盘】{code} {name} | 当前日内涨跌幅 {day_pct:.1f}%")
+               
+                # 只在交易时段监控10点之后
+                if not is_trade_time5(curr_hour, curr_min):
+                    continue
+
+                tick_info = parse_tick_info(stock_code)
+                if tick_info is None:
+                    continue
+                code = tick_info["code"]
+                name = tick_info["name"]
+                day_pct = tick_info["day_pct"]  # 日内实时涨幅
+                high = tick_info["high"] 
+                low = tick_info["low"] 
+                pre_close = tick_info["pre_close"] 
+
+                #最高，最低涨跌幅
+                high_pct = (high / pre_close - 1) * 100  
+                low_pct = (low / pre_close - 1) * 100  
+                # 横盘条件：日内涨跌幅稳定在-2% ~ +2%
+                flat_trigger = -3 < low_pct  and high_pct < 3
+                status_key = f"COND2_{code}"
+
+                if status_key not in last_status:
+                    #last_status[status_key] = flat_trigger
+                    if flat_trigger:
+                        last_status[status_key] = flat_trigger
+                        # 固定4汉字宽度：超长截断，不足补空格
+                        short_name = name[:4]
+                        fixed_name = short_name.ljust(4, "　")
+
+                        key_word = get_stock_reason_keyword(code, name, day_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                        reason = get_stock_reason_keyword(code, name, day_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+
+                        append_abnormalreason_log(code, fixed_name, reason)   #写入日志
+                        save_stocks_to_position_txt(code, fixed_name)    #代码追加到position_txt
+
+                        content4 = f"【COND2-龙头横盘{code:<12} {fixed_name} | 涨幅{day_pct:>5.1f}% | 关键词：{key_word}"
+                        write_log(content4)
 
             # ===================== 模块3：cond3 涨停500亿大盘股 高开跳水监控 =====================
             for stock_code in cond3_stocks:
@@ -1648,7 +1691,7 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
             log_f.write(full_msg + "\n")
             log_f.flush()
             # 同时打印到终端
-            print(full_msg)
+            #print(full_msg)
         except:
             pass
 
@@ -1834,7 +1877,7 @@ def position_avg_price_monitor(is_running):
         t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         full_msg = f"[{t}] {msg}"
         # 打印到Python终端
-        print(full_msg)
+        #print(full_msg)
         # 写入本地日志文件
         try:
             with open(POSITION_LOG_PATH, "a", encoding="utf-8") as f:
@@ -1973,7 +2016,7 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
         t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         full_msg = f"[{t}] {msg}"
         # 终端打印
-        print(full_msg)
+        #print(full_msg)
         # 写入日志
         try:
             with open(VOL_BREAK_LOG_PATH, "a", encoding="utf-8") as f:
@@ -2195,7 +2238,7 @@ def stock_group_strength_monitor():
         log_txt += "\n"
 
         append_strength_log(log_txt)
-        time.sleep(60)
+        time.sleep(20)
 
 # 日志股票代码提取交叉去重
 def parse_log_stock_filter_with_name():
@@ -2457,8 +2500,8 @@ dashscope.api_key = DASHSCOPE_API_KEY
 os.environ["DASHSCOPE_API_KEY"] = DASHSCOPE_API_KEY
 
 def qwen_search_stock(stock_code: str, stock_name: str, rise_pct: float) -> str:
-    # 固定今日日期，保证每次调用都带对日期
-    today = "2026年07月07日"
+    # 自动获取今日日期 格式：2026年07月09日
+    today = datetime.now().strftime("%Y年%m月%d日")
 
     system_prompt = f"""
 你是A股全网实时行情分析师，专门查找个股今日异动（大涨/大跌）的真实原因。
@@ -2472,7 +2515,8 @@ def qwen_search_stock(stock_code: str, stock_name: str, rise_pct: float) -> str:
 {today} 个股异动查询：{stock_name}（{stock_code}）今日涨幅 {rise_pct}%。
 请全网查找今日导致该股异动的真实原因，只看今日实时信息，直接用一段话说明原因。
 """.strip()
-
+    
+    print(user_prompt)
     # 重试 3 次，提升稳定性
     for attempt in range(3):
         try:
