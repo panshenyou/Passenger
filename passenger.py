@@ -98,7 +98,10 @@ POSITION_STOCK_TXT = os.path.join(CONFIG_PATH, "Position_Stock.txt")
 DEEPSEEK_INDEX = 1
 QWEN_INDEX = 2
 
-
+# 全局存储：实时成交额TOP20 [(成交额,代码,名称),...]
+AMOUNT_TOP20_LIST = []
+# 成交额排行打印间隔
+AMOUNT_RANK_INTERVAL = 20
 
 # =============================================================================
 #                                   全局变量
@@ -949,7 +952,10 @@ def check_all_thread_health():
         "sector_refresh": "板块刷新线程",
         "orderflow_analysis": "订单流分析线程",
         "strong_monitor": "强势股监控线程",
-        "main_strategy": "主选股线程"
+        "main_strategy": "主选股线程",
+        "common_drawdown_monitor": "普通个股回撤线程",
+        "position_monitor": "持仓均价监控线程",
+        "amount_rank": "成交额排行统计线程"
     }
     for key, name in thread_name_map.items():
         last_hb = THREAD_HEARTBEAT[key]
@@ -1625,8 +1631,8 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                 filter_only_cond3 = (code not in cond1_stocks)
                 #filter_only_cond3 = 1
  
-                # 条件1：高开区间 6% ~ 10%
-                branch3_open_range = 6 <= open_pct <= 10
+                # 条件1：高开区间 2% ~ 10%
+                branch3_open_range = 2 <= open_pct <= 10
                 # 条件2：时间限制，仅开盘前5分钟9:30-9:35有效
                 branch3_time_ok = (hour == 9 and 30 <= minute <= 45)
                 # 完整触发条件
@@ -2194,6 +2200,19 @@ def stock_group_strength_monitor():
         down_info.sort(reverse=True, key=lambda x: x[0])
         down_avg = round(sum(i[0] for i in down_info)/len(down_info),2) if down_info else 0.0
 
+        # 成交额Top20组 排序逻辑不变
+        top20_info = []
+        for idx, (amt, code, name) in enumerate(AMOUNT_TOP20_LIST, 1):
+            tick_info = parse_tick_info(code)
+            if not tick_info:
+                continue
+
+            drawdown = tick_info["drawdown"]
+            rise = round(drawdown, 2)
+            top20_info.append((rise, code, name))
+        top20_info.sort(reverse=True, key=lambda x: x[0])
+        top20_avg = round(sum(i[0] for i in top20_info)/len(top20_info),2) if top20_info else 0.0
+
         # 大佬通用对齐方案：固定单元格总宽度，填充全角空格强制对齐
         def get_fixed_cell(name, rise):
 
@@ -2207,7 +2226,7 @@ def stock_group_strength_monitor():
 
         # 四列竖排 先下后右
         def make_align_text(data_list):
-            col = 4
+            col = 6
             total = len(data_list)
             if total == 0:
                 return ""
@@ -2226,6 +2245,7 @@ def stock_group_strength_monitor():
 
         break_show = make_align_text(break_info)
         down_show = make_align_text(down_info)
+        top20_show = make_align_text(top20_info)
 
         # 拼接日志
         log_txt = f"—————————— {now_time} 昨筛选强度监控 ——————————"
@@ -2235,10 +2255,13 @@ def stock_group_strength_monitor():
         log_txt += f"\n【昨冲高回落组】共{len(down_stocks)}只 | 平均涨幅：{down_avg}%"
         if down_show:
             log_txt += "\n" + down_show
+        log_txt += f"\n【今成交Top20组】共{len(AMOUNT_TOP20_LIST)}只 | 平均最高回撤：{top20_avg}%"
+        if top20_show:
+            log_txt += "\n" + top20_show
         log_txt += "\n"
 
         append_strength_log(log_txt)
-        time.sleep(20)
+        time.sleep(20)     #线程执行间隔
 
 # 日志股票代码提取交叉去重
 def parse_log_stock_filter_with_name():
@@ -2311,13 +2334,85 @@ def parse_log_stock_filter_with_name():
     print(f"✅ 写入完成 | 量价齐升股：{len(pure_vol)} 只 | 容量冲高回落股：{len(all_down)} 只")
 
 
+def calc_stock_amount_rank(stock_pool):
+    """
+    统计全候选池股票实时成交额，排序取前20
+    """
+    global AMOUNT_TOP20_LIST
+    rank_data = []
+    for code in stock_pool:
+        try:
+            tick = parse_tick_info(code)
+            if not tick:
+                continue
+            name = tick["name"]
+            amount = tick["amount"]
+            if amount <= 0:
+                continue
+            rank_data.append((-amount, amount, code, name))
+        except Exception:
+            continue
+    # 按成交额从大到小排序
+    rank_data.sort()
+    # 只保留前20
+    top20 = [(item[1], item[2], item[3]) for item in rank_data[:20]]
+    AMOUNT_TOP20_LIST = top20
 
 
+def print_amount_top20():
+    """格式化打印成交额前20榜单"""
+    if not AMOUNT_TOP20_LIST:
+        print("📊 暂无成交额排行数据")
+        return
+    print("\n" + "="*70)
+    print("📈 全市场候选池 实时成交额TOP20")
+    print("="*70)
+    print(f"{'排名':<4}{'股票代码':<12}{'股票名称':<6}{'实时成交额(亿)':<12}")
+    print("-"*70)
+    for idx, (amt, code, name) in enumerate(AMOUNT_TOP20_LIST, 1):
+
+        tick_info = parse_tick_info(code)
+        if not tick_info:
+            continue
+
+        drawdown = tick_info["drawdown"]
+
+        amt_yi = amt / 10**8
+        short_name = name[:4].ljust(4, "　")
+        print(f"{idx:<4}{code:<12}{short_name:<6}{amt_yi:<12.2f} {drawdown:.2f}%")
+    print("="*70 + "\n")
+
+
+def amount_rank_monitor_thread(stock_pool, is_running):
+    """成交额排行后台线程：每20秒刷新一次"""
+    print("✅ 成交额TOP20统计线程已启动，每20秒自动刷新")
+    now_dt = datetime.now()
+    # 直接取系统当前交易时间
+    curr_hour = now_dt.hour
+    curr_min = now_dt.minute
+    
+
+    while is_running[0]:
+        # 只在交易时段监控
+        if not is_trade_time(curr_hour, curr_min):
+            continue
+
+        THREAD_HEARTBEAT["amount_rank"] = datetime.now()
+        # 计算排行
+        calc_stock_amount_rank(stock_pool)
+        # 打印榜单
+        #print_amount_top20()
+        # 休眠20秒
+        time.sleep(AMOUNT_RANK_INTERVAL)
+
+
+    
 
 def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
     #key_word = get_stock_reason_keyword("301269.SZ", "华大九天", 14.05)
     #print(key_word)
+    
 
     is_running = [True]
     # 启动持仓股均价监控线程，打印到终端和日志，9.30~9:46
@@ -2334,9 +2429,11 @@ def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     time.sleep(0.5)
     #启动昨日筛选股票监控线程，打印到日志，全天
     threading.Thread(target=stock_group_strength_monitor, daemon=True).start()
-    #监控资金流向，板块概念
-    
+    #创建线程，用于计算成交额排行前20的股票，每隔20秒计算一次
+    threading.Thread(target=amount_rank_monitor_thread, args=(pool, is_running), daemon=True).start()
+    time.sleep(0.5)
 
+   
     print("✅ 该版本没有板块刷新/强势股监控/订单流分析")
     
     try:
@@ -2397,6 +2494,7 @@ THREAD_HEARTBEAT = {
     "main_strategy": datetime.min,
     "common_drawdown_monitor": datetime.min, 
     "position_monitor": datetime.min,
+    "amount_rank": datetime.min,
 }
 # 线程超时判定阈值：超过15秒无心跳判定线程卡死
 THREAD_TIMEOUT_SEC = 15
