@@ -101,7 +101,7 @@ QWEN_INDEX = 2
 # 全局存储：实时成交额TOP20 [(成交额,代码,名称),...]
 AMOUNT_TOP20_LIST = []
 # 成交额排行打印间隔
-AMOUNT_RANK_INTERVAL = 20
+AMOUNT_RANK_INTERVAL = 30
 
 # =============================================================================
 #                                   全局变量
@@ -2359,6 +2359,7 @@ def calc_stock_amount_rank(stock_pool):
     AMOUNT_TOP20_LIST = top20
 
 
+
 def print_amount_top20():
     """格式化打印成交额前20榜单"""
     if not AMOUNT_TOP20_LIST:
@@ -2387,12 +2388,13 @@ def amount_rank_monitor_thread(stock_pool, is_running):
     """成交额排行后台线程：每20秒刷新一次"""
     print("✅ 成交额TOP20统计线程已启动，每20秒自动刷新")
     now_dt = datetime.now()
-    # 直接取系统当前交易时间
-    curr_hour = now_dt.hour
-    curr_min = now_dt.minute
+    
     
 
     while is_running[0]:
+        # 直接取系统当前交易时间
+        curr_hour = now_dt.hour
+        curr_min = now_dt.minute
         # 只在交易时段监控
         if not is_trade_time(curr_hour, curr_min):
             continue
