@@ -14,7 +14,7 @@ TITLE_FONT_SIZE = 9                # 分区标题字体大小
 LOG_POLL_INTERVAL = 0.2            # 日志文件读取轮询间隔(秒)
 CHART_REFRESH_INTERVAL = 0.3       # 分时图表后台刷新间隔(秒)
 CHART_PADDING = 30                 # 图表上下左右内边距
-LINE_WIDTH = 0.5                   # 行情线条统一宽度
+LINE_WIDTH = 0.8                   # 加粗线条，避免过细看不见
 ABNORMAL_LOG_MIN_HEIGHT = 130       # 异常原因日志最小高度
 
 # 悬浮信息提示窗配色
@@ -25,6 +25,7 @@ TIP_BORDER_COLOR = "#666666"
 # 分时图十字准星虚线样式
 CROSS_LINE_COLOR = "#505050"       # 十字线颜色
 CROSS_DASH_STYLE = (4, 4)          # 虚线间隔样式
+
 
 # A股交易时间 换算为分钟数
 MORNING_START = 570    # 09:30
@@ -50,9 +51,6 @@ LOG_FILE_NAME_MAP = {
 # 拼接为绝对路径
 LOG_FILE_MAP = {k: os.path.join(SCRIPT_DIR, v) for k, v in LOG_FILE_NAME_MAP.items()}
 
-# 数据正则表达式(预留)
-DATA_PATTERN = re.compile(r'\[(\d{2}:\d{2})\]\s*([\d.-]+),([\d.-]+)')
-
 # ====================== 主界面监控面板类 ======================
 class QuantLogPanel:
     def __init__(self, root):
@@ -69,6 +67,7 @@ class QuantLogPanel:
         CHART_BG = "#0a0a0a"              # 图表背景深色
         LINE_GRAY = "#888888"             # 量价突破线条灰色
         LINE_WHITE = "#ffffff"            # 冲高回落线条白色
+        LINE_TOP20 = "#ec8a0b"            # 今成交Top20回撤线条橙色
         AXIS_COLOR = "#444444"            # 坐标轴颜色
         TEXT_CHART_COLOR = "#aaaaaa"      # 图表文字颜色
 
@@ -78,6 +77,7 @@ class QuantLogPanel:
         self.CHART_BG = CHART_BG
         self.LINE_GRAY = LINE_GRAY
         self.LINE_WHITE = LINE_WHITE
+        self.LINE_TOP20 = LINE_TOP20
         self.AXIS_COLOR = AXIS_COLOR
         self.TEXT_CHART_COLOR = TEXT_CHART_COLOR
 
@@ -91,7 +91,7 @@ class QuantLogPanel:
         # 程序运行总开关
         self.running_flag = True
 
-        # 分时图数据源缓存列表
+        # 分时图数据源缓存列表 (分钟数, 时间字符串, 昨量价突破, 昨冲高回落, 今Top20最大回撤)
         self.chart_data = []
 
         # 悬浮提示窗相关变量
@@ -104,6 +104,12 @@ class QuantLogPanel:
         self.mouse_x = 0                  # 记录鼠标X坐标
         self.mouse_y = 0                  # 记录鼠标Y坐标
 
+        # 图表绘图缓存参数
+        self._chart_x_map = []
+        self._get_x_pos_func = None
+        self._get_y_range = (0, 0)
+        self._inner_rect = (0, 0, 0, 0)
+
         # 设置主窗口背景
         self.root.configure(bg=BG_COLOR)
 
@@ -115,15 +121,14 @@ class QuantLogPanel:
         style.map("TScrollbar", background=[("active", BG_COLOR), ("pressed", BG_COLOR)])
 
         # ====================== 整体布局搭建 ======================
-        # 垂直大布局：上层日志 + 中层日志 + 下层日志图表 + 最底异动原因区
         self.main_pane = ttk.PanedWindow(root, orient=tk.VERTICAL)
         self.main_pane.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
 
-        # -------- 上层左右双日志窗口 --------
+        # 上层左右双日志窗口
         self.top_pane = ttk.PanedWindow(self.main_pane, orient=tk.HORIZONTAL)
         self.main_pane.add(self.top_pane, weight=2)
 
-        # 左侧：异动监控区
+        # 左侧：异动涨跌区
         f1 = tk.Frame(self.top_pane, bg=BG_COLOR, bd=0)
         self.top_pane.add(f1, weight=1)
         tk.Label(f1, text="异动涨跌区", fg=FG_COLOR, bg=BG_COLOR,
@@ -137,7 +142,7 @@ class QuantLogPanel:
 
         # 右侧：冲高回落区
         f2 = tk.Frame(self.top_pane, bg=BG_COLOR, bd=0)
-        self.top_pane.add(f2, weight=3)
+        self.top_pane.add(f2, weight=1)
         tk.Label(f2, text="冲高回落区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t2 = tk.Text(f2, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
@@ -147,7 +152,7 @@ class QuantLogPanel:
         s2.pack(side=tk.RIGHT, fill=tk.Y)
         self.t2.config(yscrollcommand=s2.set)
 
-        # -------- 中层左右双日志窗口 --------
+        # 中层左右双日志窗口
         self.mid_pane = ttk.PanedWindow(self.main_pane, orient=tk.HORIZONTAL)
         self.main_pane.add(self.mid_pane, weight=2)
 
@@ -165,7 +170,7 @@ class QuantLogPanel:
 
         # 右侧：量价齐升区
         f4 = tk.Frame(self.mid_pane, bg=BG_COLOR, bd=0)
-        self.mid_pane.add(f4, weight=3)
+        self.mid_pane.add(f4, weight=1)
         tk.Label(f4, text="量价齐升区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t4 = tk.Text(f4, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
@@ -175,7 +180,7 @@ class QuantLogPanel:
         s4.pack(side=tk.RIGHT, fill=tk.Y)
         self.t4.config(yscrollcommand=s4.set)
 
-        # -------- 下层：左侧日志 + 右侧分时图 --------
+        # 下层：左侧日志 + 右侧分时图
         bottom_main = tk.Frame(self.main_pane, bg=BG_COLOR)
         self.main_pane.add(bottom_main, weight=2)
         bottom_pane = ttk.PanedWindow(bottom_main, orient=tk.HORIZONTAL)
@@ -183,7 +188,7 @@ class QuantLogPanel:
 
         # 左侧：强势监控日志
         left_log_frame = tk.Frame(bottom_pane, bg=BG_COLOR)
-        bottom_pane.add(left_log_frame, weight=1)
+        bottom_pane.add(left_log_frame, weight=12)
         tk.Label(left_log_frame, text="强势监控区", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t5 = tk.Text(left_log_frame, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
@@ -195,17 +200,17 @@ class QuantLogPanel:
 
         # 右侧：分时图画布
         chart_frame = tk.Frame(bottom_pane, bg=BG_COLOR)
-        bottom_pane.add(chart_frame, weight=1)
-        tk.Label(chart_frame, text="昨筛选强度分时图(灰线=昨量价突破 白线=昨冲高回落)",
+        bottom_pane.add(chart_frame, weight=10)
+        tk.Label(chart_frame, text="昨筛选强度分时图(灰线=昨量价突破 白线=昨冲高回落 橙线=今成交Top20平均最大回撤)",
                  fg=FG_COLOR, bg=BG_COLOR, font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.chart_canvas = tk.Canvas(chart_frame, bg=CHART_BG, bd=0, highlightthickness=0)
         self.chart_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.chart_canvas.bind("<Configure>", self.on_chart_resize)  # 窗口缩放重绘图表
+        self.chart_canvas.bind("<Configure>", self.on_chart_resize)
 
-        # ========== 新增最底部：异动原因特殊监控区 高度最小不挤压其他区域 ==========
+        # 最底部：异动原因特殊监控区
         abnormal_frame = tk.Frame(self.main_pane, bg=BG_COLOR, height=ABNORMAL_LOG_MIN_HEIGHT)
         self.main_pane.add(abnormal_frame, weight=0)
-        abnormal_frame.pack_propagate(False) # 固定最小高度
+        abnormal_frame.pack_propagate(False)
 
         tk.Label(abnormal_frame, text="通义千问异动原因", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
@@ -216,16 +221,17 @@ class QuantLogPanel:
         s6.pack(side=tk.RIGHT, fill=tk.Y)
         self.t6.config(yscrollcommand=s6.set)
 
-        # 绑定各类事件
-        self.bind_scroll_event()        # 日志手动滚动事件
-        self.bind_drag_event()          # 分割栏拖拽事件
-        self.start_file_monitor_threads()# 启动日志监听线程
-        self.start_chart_refresh_loop()  # 启动图表刷新线程
+        # 绑定事件
+        self.bind_scroll_event()
+        self.bind_drag_event()
+        self.start_file_monitor_threads()
+        self.start_chart_refresh_loop()
 
-        # 绑定图表鼠标事件(十字线+悬浮提示)
         self.chart_canvas.bind("<Enter>", self.on_chart_enter)
         self.chart_canvas.bind("<Motion>", self.on_chart_mouse_move)
         self.chart_canvas.bind("<Leave>", self.on_chart_leave)
+
+        self.root.after(200, self.draw_chart)
 
     # ====================== 工具方法 ======================
     def time_to_minute(self, time_str):
@@ -233,68 +239,75 @@ class QuantLogPanel:
         h, m = map(int, time_str.split(":"))
         return h * 60 + m
 
+    # ========== 【重点修复】新版日志数据解析函数 ==========
     def parse_log_chart_data(self, log_content):
-        """
-        解析昨日筛选区日志文本
-        提取时间、量价突破平均涨幅、冲高回落平均涨幅
-        返回结构化数据列表
-        """
         res = []
         lines = log_content.splitlines()
-        curr_hhmm = None        # 当前行时间
-        avg_break_val = None    # 量价突破均值
-        avg_fall_val = None     # 冲高回落均值
+        temp_dict = {}
+
+        # 正则简化通用匹配
+        time_reg = re.compile(r'(\d{2}:\d{2})')
+        break_reg = re.compile(r'昨量价突破.*?([+-]?\d+\.?\d+)%')
+        fall_reg = re.compile(r'昨冲高回落.*?([+-]?\d+\.?\d+)%')
+        top20_reg = re.compile(r'Top20.*?([+-]?\d+\.?\d+)%')
+
+        curr_time = None
+        brk_val = None
+        fall_val = None
+        top_val = None
 
         for line in lines:
             line = line.strip()
             if not line:
                 continue
 
-            # 匹配日志头部时间行
-            time_pat = re.compile(r'(\d{4}-\d{2}-\d{2}\s+(\d{2}:\d{2}))')
-            time_match = time_pat.search(line)
-            if time_match:
-                curr_hhmm = time_match.group(2)
-                continue
+            # 优先提取时间
+            t_match = time_reg.search(line)
+            if t_match:
+                # 上一组数据存起来
+                if curr_time and brk_val is not None and fall_val is not None and top_val is not None:
+                    temp_dict[curr_time] = (brk_val, fall_val, top_val)
+                # 重置新时间
+                curr_time = t_match.group(1)
+                brk_val = fall_val = top_val = None
 
-            # 匹配量价突破平均涨幅
-            break_pat = re.compile(r'【昨量价突破组】.*?平均涨幅[:：]\s*([+-]?\d+\.?\d*)%')
-            bm = break_pat.search(line)
-            if bm and curr_hhmm:
-                avg_break_val = float(bm.group(1))
-                continue
+            # 依次匹配三类数值
+            bm = break_reg.search(line)
+            if bm:
+                brk_val = float(bm.group(1))
+            fm = fall_reg.search(line)
+            if fm:
+                fall_val = float(fm.group(1))
+            tm = top20_reg.search(line)
+            if tm:
+                top_val = float(tm.group(1))
 
-            # 匹配冲高回落平均涨幅
-            fall_pat = re.compile(r'【昨冲高回落组】.*?平均涨幅[:：]\s*([+-]?\d+\.?\d*)%')
-            fm = fall_pat.search(line)
-            if fm and curr_hhmm:
-                avg_fall_val = float(fm.group(1))
-                # 两组数据齐全则存入列表
-                if avg_break_val is not None and avg_fall_val is not None:
-                    minute = self.time_to_minute(curr_hhmm)
-                    # 只保留交易时段数据，过滤午休
-                    if (MORNING_START <= minute <= MORNING_END) or (AFTER_START <= minute <= AFTER_END):
-                        res.append((minute, curr_hhmm, avg_break_val, avg_fall_val))
-                    # 重置等待下一组数据
-                    curr_hhmm = None
-                    avg_break_val = None
-                    avg_fall_val = None
-        # 按时间升序排序
-        return sorted(res, key=lambda x: x[0])
+        # 存入最后一组
+        if curr_time and brk_val is not None and fall_val is not None and top_val is not None:
+            temp_dict[curr_time] = (brk_val, fall_val, top_val)
+
+        # 转为标准数据格式
+        for tm_str, (b, f, t) in temp_dict.items():
+            minute = self.time_to_minute(tm_str)
+            if MORNING_START <= minute <= AFTER_END:
+                res.append((minute, tm_str, b, f, t))
+
+        # 时序排序去重
+        res.sort(key=lambda x: x[0])
+        return res
 
     def update_chart_cache(self, new_data_list):
-        """更新图表缓存，去重并限制最大数据量"""
+        """更新图表缓存，去重并保留完整时序数据"""
+        if not new_data_list:
+            return
         exist_keys = set((d[0], d[1]) for d in self.chart_data)
         for item in new_data_list:
             if (item[0], item[1]) not in exist_keys:
                 self.chart_data.append(item)
-        # 最多保留300条历史数据
-        if len(self.chart_data) > 300:
-            self.chart_data = self.chart_data[-300:]
+        self.chart_data.sort(key=lambda x: x[0])
 
     # ====================== 分时图绘制核心 ======================
     def draw_chart(self):
-        """绘制分时走势图，只刷新行情元素，保留十字准星"""
         canvas = self.chart_canvas
         cw = canvas.winfo_width()
         ch = canvas.winfo_height()
@@ -305,137 +318,170 @@ class QuantLogPanel:
         inner_w = cw - pad * 2
         inner_h = ch - pad * 2
 
-        # 全天有效交易总时长
-        total_valid_len = (MORNING_END - MORNING_START) + (AFTER_END - AFTER_START)
+        morning_start = MORNING_START
+        morning_end = MORNING_END
+        after_start = AFTER_START
+        after_end = AFTER_END
+        total_valid_min = (morning_end - morning_start) + (after_end - after_start)
 
-        # 自动计算Y轴上下限
+        def time_to_valid_x(t_val):
+            if morning_start <= t_val <= morning_end:
+                offset = t_val - morning_start
+            elif after_start <= t_val <= after_end:
+                offset = (morning_end - morning_start) + (t_val - after_start)
+            else:
+                offset = 0 if t_val < morning_start else total_valid_min
+            return pad + (offset / total_valid_min) * inner_w
+
+        # 值域适配
         if not self.chart_data:
-            min_y, max_y = -3, 3
+            min_y, max_y = -5, 5
         else:
-            y_all = [d[2] for d in self.chart_data] + [d[3] for d in self.chart_data]
+            y_break = [d[2] for d in self.chart_data]
+            y_fall = [d[3] for d in self.chart_data]
+            y_top20 = [d[4] for d in self.chart_data]
+            y_all = y_break + y_fall + y_top20
             min_y, max_y = min(y_all), max(y_all)
             ry = max_y - min_y
             min_y -= ry * 0.15
             max_y += ry * 0.15
-            if abs(ry) < 0.1:
-                min_y -= 1
-                max_y += 1
+            if abs(ry) < 0.2:
+                min_y -= 2
+                max_y += 2
 
-        # 只删除行情标签元素，不删除十字线
+        def v2y(v):
+            return ch - pad - (v - min_y) / (max_y - min_y) * inner_h
+
         canvas.delete("chart_item")
 
-        # 绘制XY主轴
+        # 坐标轴
         canvas.create_line(pad, pad, pad, ch-pad, fill=self.AXIS_COLOR, width=1, tag="chart_item")
         canvas.create_line(pad, ch-pad, cw-pad, ch-pad, fill=self.AXIS_COLOR, width=1, tag="chart_item")
 
-        # 时间转画布X坐标（跳过午休空白区域）
-        def get_x_pos(min_val):
-            if MORNING_START <= min_val <= MORNING_END:
-                offset = min_val - MORNING_START
-            else:
-                offset = (MORNING_END - MORNING_START) + (min_val - AFTER_START)
-            return pad + (offset / total_valid_len) * inner_w
-
-        # 涨跌幅转画布Y坐标
-        def get_y_pos(val):
-            return ch - pad - ((val - min_y) / (max_y - min_y)) * inner_h
-
-        # 绘制早盘下午分割虚线
-        split_x = get_x_pos(MORNING_END)
-        canvas.create_line(split_x, pad, split_x, ch-pad, fill="#333333", width=1, dash=(3,3), tag="chart_item")
-
-        # X轴时间刻度
-        tick_list = [(MORNING_START, "09:30"), (MORNING_END, "11:30"),
-                     (AFTER_START, "13:00"), (AFTER_END, "15:00")]
-        for tm_val, txt in tick_list:
-            px = get_x_pos(tm_val)
+        # X时间刻度
+        time_ticks = [(morning_start, "09:30"),(morning_end, "11:30"),(after_start, "13:00"),(after_end, "15:00")]
+        for tm_val, txt in time_ticks:
+            px = time_to_valid_x(tm_val)
             canvas.create_text(px, ch-pad+12, text=txt, fill=self.TEXT_CHART_COLOR, font=("Consolas",7), tag="chart_item")
 
-        # Y轴涨跌幅网格线
+        # Y轴网格
         y_step = (max_y - min_y) / 5
         for i in range(6):
             yv = min_y + y_step * i
-            yp = get_y_pos(yv)
+            yp = v2y(yv)
             canvas.create_line(pad, yp, cw-pad, yp, fill="#222222", width=1, tag="chart_item")
             canvas.create_text(pad-5, yp, text=f"{yv:.1f}", fill=self.TEXT_CHART_COLOR, font=("Consolas",7), anchor=tk.E, tag="chart_item")
 
-        # 0涨幅基准线
-        zero_y = get_y_pos(0)
+        # 零轴
+        zero_y = v2y(0)
         if pad < zero_y < ch-pad:
             canvas.create_line(pad, zero_y, cw-pad, zero_y, fill="#555555", width=1, dash=(2,2), tag="chart_item")
 
-        # 绘制灰色量价突破走势线
-        if len(self.chart_data)>=2:
-            pts1 = [(get_x_pos(d[0]), get_y_pos(d[2])) for d in self.chart_data]
-            for i in range(len(pts1)-1):
-                x1,y1=pts1[i]
-                x2,y2=pts1[i+1]
-                canvas.create_line(x1,y1,x2,y2, fill=self.LINE_GRAY, width=LINE_WIDTH, tag="chart_item")
+        # 三条曲线强制渲染
+        if len(self.chart_data) >= 2:
+            # 灰线
+            pts = [(time_to_valid_x(d[0]), v2y(d[2])) for d in self.chart_data]
+            for i in range(len(pts)-1):
+                canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_GRAY, width=LINE_WIDTH, tag="chart_item")
+            # 白线
+            pts = [(time_to_valid_x(d[0]), v2y(d[3])) for d in self.chart_data]
+            for i in range(len(pts)-1):
+                canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_WHITE, width=LINE_WIDTH, tag="chart_item")
+            # 橙线
+            pts = [(time_to_valid_x(d[0]), v2y(d[4])) for d in self.chart_data]
+            for i in range(len(pts)-1):
+                canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_TOP20, width=LINE_WIDTH, tag="chart_item")
 
-        # 绘制白色冲高回落走势线
-        if len(self.chart_data)>=2:
-            pts2 = [(get_x_pos(d[0]), get_y_pos(d[3])) for d in self.chart_data]
-            for i in range(len(pts2)-1):
-                x1,y1=pts2[i]
-                x2,y2=pts2[i+1]
-                canvas.create_line(x1,y1,x2,y2, fill=self.LINE_WHITE, width=LINE_WIDTH, tag="chart_item")
-
-        # 缓存坐标映射，用于鼠标拾取数据
-        self._chart_x_map = [(get_x_pos(d[0]), d) for d in self.chart_data]
-        self._get_x_pos_func = get_x_pos
+        self._chart_x_map = [(time_to_valid_x(d[0]), d) for d in self.chart_data]
+        self._get_x_pos_func = time_to_valid_x
         self._get_y_range = (min_y, max_y)
         self._inner_rect = (pad, ch-pad, cw-pad, pad)
 
-        # 重绘完成后恢复十字准星
+        # ===================== 靠近触发点底部提示+边框+指向箭头 =====================
+        first_risk_pos = None
+        for data in self.chart_data:
+            top20_dd = data[4]
+            if top20_dd < -3.0:
+                first_risk_pos = data
+                break
+
+        if first_risk_pos:
+            # 风险点位坐标
+            risk_x = time_to_valid_x(first_risk_pos[0])
+            risk_y = v2y(first_risk_pos[4])
+
+            # 点位小红点标记
+            canvas.create_oval(
+                risk_x-3, risk_y-3, risk_x+3, risk_y+3,
+                fill="#ff3333", outline="#ff6666", tag="chart_item"
+            )
+
+            # 提示文字X坐标和触发点对齐，Y固定在图表最下方内侧
+            tip_x = risk_x
+            tip_y = ch - 18
+            warn_text = f"注意风险，勿接力"
+
+            # 带红色细边框，透明内部底色
+            txt_w = 100
+            txt_h = 16
+            canvas.create_rectangle(
+                tip_x - txt_w/2 - 4, tip_y - txt_h/2 - 2,
+                tip_x + txt_w/2 + 4, tip_y + txt_h/2 + 2,
+                fill="", outline="#ff4444", width=1, dash=(3,3), tag="chart_item"
+            )
+
+            # 警示文字
+            canvas.create_text(
+                tip_x, tip_y,
+                text=warn_text,
+                fill="#ff5555",
+                font=("微软雅黑", 8, "bold"),
+                anchor=tk.CENTER,
+                tag="chart_item"
+            )
+
+            # 直线箭头从底部提示框向上指向破位点
+            canvas.create_line(
+                tip_x, tip_y - txt_h/2 - 2,
+                risk_x, risk_y + 3,
+                fill="#ff4444", width=1.2, dash=(3,3), arrow=tk.FIRST, tag="chart_item"
+            )
+        # =====================================================================
+
         if self.mouse_in_chart:
             self.draw_cross_line(self.mouse_x, self.mouse_y)
 
     def draw_cross_line(self, x, y):
-        """单独绘制十字准星虚线"""
         pad, bottom, right, top = self._inner_rect
         self.chart_canvas.delete(self.cross_tag)
-        # 仅在图表有效区域内绘制
         if pad < x < right and top < y < bottom:
-            # 垂直竖线
-            self.chart_canvas.create_line(x, top, x, bottom, fill=CROSS_LINE_COLOR,
-                                          dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
-            # 水平横线
-            self.chart_canvas.create_line(pad, y, right, y, fill=CROSS_LINE_COLOR,
-                                          dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
+            self.chart_canvas.create_line(x, top, x, bottom, fill=CROSS_LINE_COLOR,dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
+            self.chart_canvas.create_line(pad, y, right, y, fill=CROSS_LINE_COLOR,dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
 
     # ====================== 图表鼠标事件 ======================
     def on_chart_enter(self, event):
-        """鼠标进入图表区域"""
         self.mouse_in_chart = True
         self.mouse_x = event.x
         self.mouse_y = event.y
-        # 创建悬浮信息窗
         if self.tip_win is not None:
             return
         self.tip_win = tk.Toplevel(self.root)
         self.tip_win.overrideredirect(True)
         self.tip_win.attributes("-topmost", True)
         self.tip_win.configure(bg=TIP_BG_COLOR)
-        self.tip_label = tk.Label(
-            self.tip_win, text="", bg=TIP_BG_COLOR, fg=TIP_FG_COLOR,
-            font=("Consolas", 8), justify=tk.LEFT
-        )
+        self.tip_label = tk.Label(self.tip_win, text="", bg=TIP_BG_COLOR, fg=TIP_FG_COLOR,font=("Consolas", 8), justify=tk.LEFT)
         self.tip_label.pack(ipadx=6, ipady=3)
         self.draw_cross_line(event.x, event.y)
 
     def on_chart_mouse_move(self, event):
-        """鼠标在图表内移动，实时更新十字线+提示信息"""
         if self.tip_win is None:
             return
         self.mouse_x = event.x
         self.mouse_y = event.y
         x, y = event.x, event.y
         pad, bottom, right, top = self._inner_rect
-
-        # 实时刷新十字线
         self.draw_cross_line(x, y)
 
-        # 匹配最近时间点数据
         if not self._chart_x_map or not (pad < x < right and top < y < bottom):
             return
         near_data = None
@@ -448,15 +494,16 @@ class QuantLogPanel:
         if not near_data or min_dis > 20:
             return
 
-        # 组装提示文字
-        _, hhmm, break_rate, fall_rate = near_data
-        text = f"时间：{hhmm}\n昨量价突破：{break_rate:.2f}%\n昨冲高回落：{fall_rate:.2f}%"
+        _, hhmm, break_rate, fall_rate, top20_dd = near_data
+        text = (f"时间：{hhmm}\n"
+                f"昨量价突破：{break_rate:.2f}%\n"
+                f"昨冲高回落：{fall_rate:.2f}%\n"
+                f"今Top20最大回撤：{top20_dd:.2f}%")
         self.tip_label.config(text=text)
 
-        # 智能避让屏幕边缘
         win_x = self.chart_canvas.winfo_rootx() + x + 15
         win_y = self.chart_canvas.winfo_rooty() + y + 15
-        w, h = 120, 50
+        w, h = 140, 65
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         if win_x + w > sw:
@@ -466,7 +513,6 @@ class QuantLogPanel:
         self.tip_win.geometry(f"{w}x{h}+{win_x}+{win_y}")
 
     def on_chart_leave(self, event):
-        """鼠标离开图表区域，销毁提示窗+清除十字线"""
         self.mouse_in_chart = False
         if self.tip_win is not None:
             self.tip_win.destroy()
@@ -475,11 +521,9 @@ class QuantLogPanel:
         self.chart_canvas.delete(self.cross_tag)
 
     def on_chart_resize(self, event):
-        """窗口大小改变，重绘图表"""
         self.draw_chart()
 
     def start_chart_refresh_loop(self):
-        """后台线程定时刷新走势图"""
         def loop():
             while self.running_flag:
                 time.sleep(CHART_REFRESH_INTERVAL)
@@ -488,13 +532,11 @@ class QuantLogPanel:
 
     # ====================== 日志窗口功能 ======================
     def limit_log_lines(self, text_widget):
-        """限制日志文本框最大行数，超出自动清空顶部"""
         cnt = int(text_widget.index(tk.END).split('.')[0])
         if cnt > MAX_LOG_LINES:
             text_widget.delete("1.0", f"{cnt-MAX_LOG_LINES}.0")
 
     def bind_scroll_event(self):
-        """绑定鼠标滚轮事件，标记手动浏览状态"""
         boxes = [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]
         def cb(e):
             self.manual_view = True
@@ -503,12 +545,10 @@ class QuantLogPanel:
             b.bind("<MouseWheel>", cb)
 
     def safe_append_log(self, wd, msg):
-        """线程安全添加日志信息"""
         def inner():
             t = time.strftime("%H:%M:%S")
             wd.insert(tk.END, f"[{t}] {msg}\n")
             self.limit_log_lines(wd)
-            # 静置超时恢复自动滚动
             if self.manual_view and time.time()-self.last_scroll_time > RESUME_FOLLOW_DELAY:
                 self.manual_view = False
             if not self.manual_view:
@@ -516,7 +556,6 @@ class QuantLogPanel:
         self.root.after_idle(inner)
 
     def bind_drag_event(self):
-        """拖拽分割栏时临时禁用日志编辑"""
         def start(_):
             for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]:
                 w.config(state=tk.DISABLED)
@@ -527,7 +566,6 @@ class QuantLogPanel:
             p.bind("<ButtonPress-1>", start)
             p.bind("<ButtonRelease-1>", end)
 
-    # 快捷日志输出方法
     def log_warn(self, msg):self.safe_append_log(self.t1, msg)
     def log_strong(self, msg):self.safe_append_log(self.t2, msg)
     def log_market(self, msg):self.safe_append_log(self.t3, msg)
@@ -536,12 +574,10 @@ class QuantLogPanel:
     def log_abnormal(self, msg):self.safe_append_log(self.t6, msg)
 
     def get_text_widget(self, k):
-        """根据key获取对应日志文本框"""
         m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5,"t6":self.t6}
         return m.get(k)
 
     def single_file_monitor(self, key, path):
-        """单文件日志监听线程：增量读取日志"""
         pos = self.file_read_pos[key]
         wd = self.get_text_widget(key)
         while self.running_flag:
@@ -549,7 +585,6 @@ class QuantLogPanel:
                 if not os.path.exists(path):
                     time.sleep(LOG_POLL_INTERVAL)
                     continue
-                # 从上次读取位置继续读取
                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
                     f.seek(pos)
                     lines = f.readlines()
@@ -557,11 +592,11 @@ class QuantLogPanel:
                     self.file_read_pos[key] = pos
                 if lines:
                     cont = "".join(lines)
-                    # 昨日筛选日志同步解析为图表数据
+                    # 只解析昨日筛选日志
                     if key == "t3":
                         arr = self.parse_log_chart_data(cont)
                         self.update_chart_cache(arr)
-                    # UI更新放入主线程
+                    # 更新日志面板
                     def ui_up():
                         wd.insert(tk.END, cont)
                         self.limit_log_lines(wd)
@@ -570,85 +605,31 @@ class QuantLogPanel:
                         if not self.manual_view:
                             wd.see(tk.END)
                     self.root.after_idle(ui_up)
-            except Exception:
+            except Exception as e:
                 pass
             time.sleep(LOG_POLL_INTERVAL)
 
     def start_file_monitor_threads(self):
-        """批量启动所有日志监听线程"""
         for k, p in LOG_FILE_MAP.items():
             threading.Thread(target=self.single_file_monitor, args=(k, p), daemon=True).start()
 
     def close_all_monitor(self):
-        """关闭程序时终止所有线程与窗口"""
         self.running_flag = False
         if self.tip_win:
             self.tip_win.destroy()
         self.chart_canvas.delete(self.cross_tag)
 
-# ====================== 模拟测试数据生成函数 ======================
-def mock_market_data_writer():
-    """生成仿真行情日志，用于本地测试无需对接实盘"""
-    log_path = LOG_FILE_MAP["t3"]
-    # 清空旧日志
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write("")
-
-    cur_min = MORNING_START
-    import random
-
-    while True:
-        if not app.running_flag:
-            break
-        # 跳过午休时段
-        if MORNING_END < cur_min < AFTER_START:
-            cur_min = AFTER_START
-        # 收盘后重置从头开始
-        if cur_min > AFTER_END:
-            cur_min = MORNING_START
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write("")
-
-        hh = cur_min // 60
-        mm = cur_min % 60
-        hhmm_str = f"{hh:02d}:{mm:02d}"
-        date_str = "2026-06-30"
-
-        # 随机生成两组平均涨跌幅
-        val_break = round(random.uniform(-2.5, 6.5), 2)
-        val_drop = round(random.uniform(-5.5, 3.0), 2)
-
-        # 拼接和真实格式一致的日志内容
-        log_text = f"""—————————— {date_str} {hhmm_str} 昨筛选强度监控 ——————————
-【昨量价突破组】共6只 | 平均涨幅：{val_break}%
-机器人　  8.12% | 聚和材料  3.04% | 荣昌生物  2.14%
-金宏气体  6.10% | 广钢气体  2.45% | 贝达药业 -0.37%
-【昨冲高回落组】共43只 | 平均涨幅：{val_drop}%
-晶瑞电材  5.72% | 宏景科技  0.34% | 铂科新材 -1.16% | 东方钽业 -2.51%
-昊华科技  4.70% | 澜起科技  0.20% | 江钨装备 -1.31% | 飞凯材料 -2.80%
-
-"""
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(log_text)
-
-        cur_min += 1
-        time.sleep(0.6)
 
 # ====================== 程序入口 ======================
 if __name__ == "__main__":
     root = tk.Tk()
     app = QuantLogPanel(root)
 
-    # 关闭窗口回调
     def on_close():
         app.close_all_monitor()
         root.destroy()
     root.protocol("WM_DELETE_WINDOW", on_close)
 
-    # 开启模拟数据测试(注释则关闭)
-    # threading.Thread(target=mock_market_data_writer, daemon=True).start()
-
-    # 启动主循环，捕获Ctrl+C中断
     try:
         root.mainloop()
     except KeyboardInterrupt:
