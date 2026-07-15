@@ -2387,11 +2387,9 @@ def print_amount_top20():
 def amount_rank_monitor_thread(stock_pool, is_running):
     """成交额排行后台线程：每20秒刷新一次"""
     print("✅ 成交额TOP20统计线程已启动，每20秒自动刷新")
-    now_dt = datetime.now()
-    
-    
 
     while is_running[0]:
+        now_dt = datetime.now()
         # 直接取系统当前交易时间
         curr_hour = now_dt.hour
         curr_min = now_dt.minute
@@ -2431,6 +2429,7 @@ def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     time.sleep(0.5)
     #启动昨日筛选股票监控线程，打印到日志，全天
     threading.Thread(target=stock_group_strength_monitor, daemon=True).start()
+    time.sleep(0.5)
     #创建线程，用于计算成交额排行前20的股票，每隔20秒计算一次
     threading.Thread(target=amount_rank_monitor_thread, args=(pool, is_running), daemon=True).start()
     time.sleep(0.5)

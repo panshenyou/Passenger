@@ -159,7 +159,7 @@ class QuantLogPanel:
         # 左侧：昨日筛选区
         f3 = tk.Frame(self.mid_pane, bg=BG_COLOR, bd=0)
         self.mid_pane.add(f3, weight=1)
-        tk.Label(f3, text="昨日筛选区", fg=FG_COLOR, bg=BG_COLOR,
+        tk.Label(f3, text="昨日筛选区(昨量价突破>-1%, 昨冲高回落>-2%, Top20>-3%)", fg=FG_COLOR, bg=BG_COLOR,
                  font=("Consolas", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2)
         self.t3 = tk.Text(f3, font=("Consolas", LOG_FONT_SIZE), bg=BG_COLOR, fg=FG_COLOR,
                           insertbackground=CURSOR_COLOR, wrap=tk.CHAR, bd=0, relief=tk.FLAT)
