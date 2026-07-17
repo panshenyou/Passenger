@@ -2274,18 +2274,13 @@ def parse_log_stock_filter_with_name():
     """
 
 
-    # ========== 最前面新增判断：目标文件存在且有内容，直接返回不执行 ==========
-    def file_has_content(file_path):
-        if not os.path.exists(file_path):
-            return False
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return bool(f.read().strip())
-        except:
-            return False
+    # ========== 最前面新增判断：目标文件存在，直接返回不执行 ==========
+    def file_is_exist(file_path):
+        return os.path.exists(file_path)
 
-    if file_has_content(FILE_BREAK) and file_has_content(FILE_DRAWDOWN):
-        print("📄 目标整理文件已有数据，无需重复生成，直接跳过")
+    # 改成只判断文件存在就跳过，不管里面空不空
+    if file_is_exist(FILE_BREAK) and file_is_exist(FILE_DRAWDOWN):
+        print("📄 文件已存在，跳过生成，保留原有内容")
         return
     # ======================================================================
 

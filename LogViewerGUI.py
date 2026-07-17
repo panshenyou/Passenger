@@ -419,7 +419,7 @@ class QuantLogPanel:
             # 提示文字X坐标和触发点对齐，Y固定在图表最下方内侧
             tip_x = risk_x
             tip_y = ch - 18
-            warn_text = f"注意风险，勿接力"
+            warn_text = f"勿接力！切新题材！"
 
             # 带红色细边框，透明内部底色
             txt_w = 100
