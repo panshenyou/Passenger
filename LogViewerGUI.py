@@ -10,7 +10,7 @@ import re
 MAX_LOG_LINES = 60                 # 每个日志区域最大显示行数
 RESUME_FOLLOW_DELAY = 3.0          # 手动滑动日志后，静置多久恢复自动滚动
 LOG_FONT_SIZE = 7                  # 日志内容字体大小
-TITLE_FONT_SIZE = 10               # 分区标题字体大小
+TITLE_FONT_SIZE = 8               # 分区标题字体大小
 LOG_POLL_INTERVAL = 0.2            # 日志文件读取轮询间隔(秒)
 CHART_REFRESH_INTERVAL = 0.3       # 分时图表后台刷新间隔(秒)
 CHART_PADDING = 25                 # 缩小图表内边距
@@ -51,7 +51,7 @@ LOG_FILE_MAP = {k: os.path.join(SCRIPT_DIR, v) for k, v in LOG_FILE_NAME_MAP.ite
 class QuantLogPanel:
     def __init__(self, root):
         self.root = root
-        self.root.title("量化监控终端")
+        self.root.title("监控面板")
         self.root.geometry("1280x768")
         self.root.resizable(True, True)
 
