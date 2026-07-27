@@ -401,7 +401,7 @@ class QuantLogPanel:
             canvas.create_oval(risk_x-3, risk_y-3, risk_x+3, risk_y+3, fill=self.FALL_GREEN, outline=self.FALL_GREEN, tag="chart_item")
             tip_x = 150
             tip_y = ch - 30
-            warn_text = f"资金出逃嫌疑，切新题材或打首板"
+            warn_text = f"资金出逃嫌疑，切新题材或打首板，小市值"
             txt_w = len(warn_text) * 10
             txt_h = 12
             canvas.create_rectangle(tip_x-txt_w/2-4, tip_y-txt_h/2-2, tip_x+txt_w/2+4, tip_y+txt_h/2+2,
@@ -432,7 +432,7 @@ class QuantLogPanel:
             # 动态居中中上位置，随窗口自适应
             tip_x = pad + inner_w * 0.4
             tip_y = pad + inner_h * 0.1
-            warn_text = "昨量价齐升，持续性强，可追高" if VolPriceBreak_up_or_down==1 else f"昨量价齐升，持续性差，别追高"
+            warn_text = "昨量价齐升超预期" if VolPriceBreak_up_or_down==1 else f"昨量价齐升不及预期"
             txt_len = len(warn_text) * 10
             canvas.create_rectangle(tip_x - txt_len/2 - 4, tip_y - 8, tip_x + txt_len/2 + 4, tip_y + 8,
                              fill="", outline=VolPriceBreak_Color, width=1, dash=(3,3), tag="chart_item")
@@ -462,7 +462,7 @@ class QuantLogPanel:
             canvas.create_oval(risk_x-3, risk_y-3, risk_x+3, risk_y+3, fill=CommonDrawdown_Color, outline=CommonDrawdown_Color, tag="chart_item")
             tip_x = 420
             tip_y = ch - 32
-            warn_text = f"超预期，做多意愿强，可考虑今冲高回落" if CommonDrawdown_up_or_down==1 else f"资金割肉，恐慌情绪蔓延，小心冲高回落"
+            warn_text = f"昨冲高回落超预期" if CommonDrawdown_up_or_down==1 else f"昨冲高回落资金割肉，恐慌情绪蔓延"
             txt_w = len(warn_text) * 10
             canvas.create_rectangle(tip_x-txt_w/2-4, tip_y-8, tip_x+txt_w/2+4, tip_y+8, fill="", outline=CommonDrawdown_Color, width=1, dash=(3,3), tag="chart_item")
             canvas.create_text(tip_x, tip_y, text=warn_text, fill=CommonDrawdown_Color, font=("微软雅黑",LOG_FONT_SIZE,"bold"), anchor=tk.CENTER, tag="chart_item")
