@@ -41,7 +41,8 @@ LOG_FILE_NAME_MAP = {
     "t3": "Log_StockStrengthYesterday.txt", # t3窗口：昨日筛选区(分时图数据源)
     "t4": "Log_VolPriceBreak.txt",          # t4窗口：量价齐升区日志
     "t5": "Log_StrongStock.txt",            # t5窗口：强势监控区日志
-    "t6": "Log_AbnormalReason.txt"          # t6窗口：异动原因特殊监控区
+    "t6": "Log_AbnormalReason.txt",          # t6窗口：异动原因特殊监控区
+    "t7": "Log_SmallArbitrageStock.txt"      # t7窗口：小盘套利监控区
 }
 
 # 拼接为绝对路径
@@ -211,19 +212,37 @@ class QuantLogPanel:
         self.chart_canvas.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
         self.chart_canvas.bind("<Configure>", self.on_chart_resize)
 
-        # 最底部：异动原因特殊监控区
-        abnormal_frame = tk.Frame(self.main_pane, bg=PANEL_BG, height=ABNORMAL_LOG_MIN_HEIGHT, bd=0)
-        self.main_pane.add(abnormal_frame, weight=0)
-        abnormal_frame.pack_propagate(False)
+        # ==================== 最底部改造：水平分割 t6 | t7 ====================
+        abnormal_wrapper = tk.Frame(self.main_pane, bg=PANEL_BG, height=ABNORMAL_LOG_MIN_HEIGHT, bd=0)
+        self.main_pane.add(abnormal_wrapper, weight=0)
+        abnormal_wrapper.pack_propagate(False)
 
-        tk.Label(abnormal_frame, text="AI异动逻辑解析(通义千问)", fg=self.TEXT_TITLE, bg=PANEL_BG,
+        abnormal_h_pane = ttk.PanedWindow(abnormal_wrapper, orient=tk.HORIZONTAL)
+        abnormal_h_pane.pack(fill=tk.BOTH, expand=True)
+
+        # t6：AI异动逻辑解析
+        frame_t6 = tk.Frame(abnormal_h_pane, bg=PANEL_BG, bd=0)
+        abnormal_h_pane.add(frame_t6, weight=1)
+        tk.Label(frame_t6, text="AI异动逻辑解析(通义千问)", fg=self.TEXT_TITLE, bg=PANEL_BG,
                  font=("微软雅黑", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2, pady=1)
-        self.t6 = tk.Text(abnormal_frame, font=("微软雅黑", LOG_FONT_SIZE), bg="#171E2B", fg=self.TEXT_NORMAL,
+        self.t6 = tk.Text(frame_t6, font=("微软雅黑", LOG_FONT_SIZE), bg="#171E2B", fg=self.TEXT_NORMAL,
                           insertbackground=CURSOR_COLOR, wrap=tk.CHAR, bd=0, relief=tk.FLAT)
         self.t6.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1, pady=1)
-        s6 = ttk.Scrollbar(abnormal_frame, command=self.t6.yview)
+        s6 = ttk.Scrollbar(frame_t6, command=self.t6.yview)
         s6.pack(side=tk.RIGHT, fill=tk.Y)
         self.t6.config(yscrollcommand=s6.set)
+
+        # t7：小盘套利监控区
+        frame_t7 = tk.Frame(abnormal_h_pane, bg=PANEL_BG, bd=0)
+        abnormal_h_pane.add(frame_t7, weight=1)
+        tk.Label(frame_t7, text="小盘套利监控区", fg=self.TEXT_TITLE, bg=PANEL_BG,
+                 font=("微软雅黑", TITLE_FONT_SIZE, "bold")).pack(anchor="nw", padx=2, pady=1)
+        self.t7 = tk.Text(frame_t7, font=("微软雅黑", LOG_FONT_SIZE), bg="#171E2B", fg=self.TEXT_NORMAL,
+                          insertbackground=CURSOR_COLOR, wrap=tk.CHAR, bd=0, relief=tk.FLAT)
+        self.t7.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=1, pady=1)
+        s7 = ttk.Scrollbar(frame_t7, command=self.t7.yview)
+        s7.pack(side=tk.RIGHT, fill=tk.Y)
+        self.t7.config(yscrollcommand=s7.set)
 
         # 绑定事件
         self.bind_scroll_event()
@@ -558,7 +577,7 @@ class QuantLogPanel:
             text_widget.delete("1.0", f"{cnt-MAX_LOG_LINES}.0")
 
     def bind_scroll_event(self):
-        boxes = [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]
+        boxes = [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6, self.t7]
         def cb(e):
             self.manual_view = True
             self.last_scroll_time = time.time()
@@ -578,10 +597,10 @@ class QuantLogPanel:
 
     def bind_drag_event(self):
         def start(_):
-            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]:
+            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6, self.t7]:
                 w.config(state=tk.DISABLED)
         def end(_):
-            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6]:
+            for w in [self.t1, self.t2, self.t3, self.t4, self.t5, self.t6, self.t7]:
                 w.config(state=tk.NORMAL)
         for p in [self.top_pane, self.mid_pane, self.main_pane]:
             p.bind("<ButtonPress-1>", start)
@@ -593,9 +612,10 @@ class QuantLogPanel:
     def log_position(self, msg):self.safe_append_log(self.t4, msg)
     def log_system(self, msg):self.safe_append_log(self.t5, msg)
     def log_abnormal(self, msg):self.safe_append_log(self.t6, msg)
+    def log_arbitrage(self, msg):self.safe_append_log(self.t7, msg) 
 
     def get_text_widget(self, k):
-        m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5,"t6":self.t6}
+        m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5,"t6":self.t6,"t7":self.t7}
         return m.get(k)
 
     def single_file_monitor(self, key, path):

@@ -89,7 +89,7 @@ POSITION_LOG_PATH = os.path.join(LOG_PATH, "Log_PositionStock.txt")
 VOL_BREAK_LOG_PATH = os.path.join(LOG_PATH, "Log_VolPriceBreak.txt")
 YESTERDAY_STRENGTH_LOG = os.path.join(LOG_PATH, "Log_StockStrengthYesterday.txt")
 ABNORMALREASON_LOG = os.path.join(LOG_PATH, "Log_AbnormalReason.txt")
-
+SMALL_ARBITRAGE_LOG_PATH = os.path.join(LOG_PATH, "Log_SmallArbitrageStock.txt")
 # 配置文件
 CONFIG_TXT = os.path.join(CONFIG_PATH, "Config.txt")
 POSITION_STOCK_TXT = os.path.join(CONFIG_PATH, "Position_Stock.txt")
@@ -1089,6 +1089,37 @@ def basic_filter(stock):
         float_mv = info.get("FloatVolume", 0) * price
         # 流通市值低于100亿过滤
         if float_mv <= 12000000000:
+            return False
+        up = info.get("UpStopPrice", 0)
+        down = info.get("DownStopPrice", 0)
+        return True
+    except Exception:
+        return False
+    
+def basic_filter2(stock):
+    #print(stock)
+    """基础风控过滤：剔除北交所、ST、新股、小市值"""
+    try:
+        code = stock.split(".")[0]
+
+        if code.startswith(("00", "60")):
+            return False
+        info = xtdata.get_instrument_detail(stock)
+        if not info:
+            return False
+        name = info.get("InstrumentName", "")
+        # 过滤ST、退市股
+        if "ST" in name or "退" in name:
+            return False
+        now = datetime.now()
+        list_date = int(info.get("OpenDate", 0))
+        # 上市不满60日新股过滤
+        if int(now.strftime("%Y%m%d")) - list_date < 60:
+            return False
+        price = get_now_price(stock)
+        float_mv = info.get("FloatVolume", 0) * price
+        # 流通市值低于100亿过滤
+        if float_mv >= 5000000000:
             return False
         up = info.get("UpStopPrice", 0)
         down = info.get("DownStopPrice", 0)
@@ -2400,10 +2431,128 @@ def amount_rank_monitor_thread(stock_pool, is_running):
         # 休眠20秒
         time.sleep(AMOUNT_RANK_INTERVAL)
 
+def small_stock_arbitrage_monitor(smallstock_pool, is_running):
+    """
+    小市值套利监控线程【修复时段逻辑版】
+    规则：
+    1. 9:30 ~ 9:40 持续筛选存入缓存BasicSetCache：
+       - 开盘涨跌幅 -3% < open_pct < 3%
+       - 9:35前 日内最高价涨幅 < 10%
+       - 9:35~9:40 日内最高价涨幅 < 15%
+    2. 9:41 ~ 10:59 仅读取缓存内标的，判断日内涨幅>11%
+    3. 满足涨幅条件：写入Log_SmallArbitrageStock.txt + 追加Position_Stock.txt
+    4. 当日同一股票仅记录一次，避免重复日志
+    """
+    # 跨时段缓存：9:40前筛选合格股票，9:41后复用
+    BasicSetCache = set()
+    # 当日已记录股票去重集合
+    record_set = set()
+    # 交易日标记，次日清空缓存
+    cache_date = datetime.now().strftime("%Y%m%d")
 
+    # 日志写入封装
+    def write_arbitrage_log(msg):
+        try:
+            t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            line = f"[{t}] {msg}\n"
+            with open(SMALL_ARBITRAGE_LOG_PATH, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except Exception:
+            pass
+
+    write_arbitrage_log("========== 小市值套利监控线程启动 ==========")
+    while is_running[0]:
+        THREAD_HEARTBEAT["small_arbitrage"] = datetime.now()
+        now_dt = datetime.now()
+        curr_h = now_dt.hour
+        curr_m = now_dt.minute
+        today_str = now_dt.strftime("%Y%m%d")
+
+        # 跨交易日自动清空缓存与记录集合
+        #if today_str != cache_date:
+        #    BasicSetCache.clear()
+        #    record_set.clear()
+        #    cache_date = today_str
+        #    write_arbitrage_log(f"【缓存重置】交易日切换，清空开盘筛选缓存")
+
+        # ========== 阶段1：9:30 ~ 9:40 持续筛选，存入缓存 ==========
+        if curr_h == 9 and 30 <= curr_m <= 40:
+            print(BasicSetCache)
+            for code in smallstock_pool:
+                tick_info = parse_tick_info(code)
+                if not tick_info:
+                    continue
+                open_pct = tick_info["open_pct"]
+                pre_close = tick_info["pre_close"]
+                high_price = tick_info["high"]
+
+                # 条件1：开盘涨跌幅 -3% ~ 3%
+                if not (-3 < open_pct < 3):
+                    continue
+                if pre_close <= 0:
+                    continue
+                high_pct = (high_price / pre_close - 1) * 100
+
+                # 分时段最高价限制校验
+                if curr_m <= 35:
+                    # 9:30-9:35 最高价涨幅小于10%
+                    if high_pct >= 10:
+                        continue
+                else:
+                    # 9:36-9:40 最高价涨幅小于15%
+                    if high_pct >= 15:
+                        # 超标，若已在缓存则移除
+                        if code in BasicSetCache:
+                            BasicSetCache.remove(code)
+                        continue
+                # 全部条件通过，加入缓存集合（自动去重）
+                BasicSetCache.add(code)
+            time.sleep(2)
+            continue
+
+        # ========== 阶段2：9:41 ~ 10:59 读取缓存，判断涨幅触发信号 ==========
+        if (curr_h == 9 and curr_m >= 41) or (curr_h == 10 and curr_m <= 59):
+            # 缓存为空直接跳过
+            if not BasicSetCache:
+                time.sleep(0.5)
+                continue
+            # 遍历缓存内已筛选完成的股票
+            for code in BasicSetCache:
+                # 当日已记录则跳过
+                if code in record_set:
+                    continue
+                tick_info = parse_tick_info(code)
+                if not tick_info:
+                    continue
+                day_pct = tick_info["day_pct"]
+                name = tick_info["name"]
+                short_name = name[:4].ljust(4, "　")
+
+                # 触发条件：日内实时涨幅大于11%
+                if day_pct > 11:
+                    fix_name = short_name
+
+                    key_word = get_stock_reason_keyword(code, name, day_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
+                    reason = get_stock_reason_keyword(code, name, day_pct, QWEN_INDEX)   #1-deepseek  2-qwen
+                    append_abnormalreason_log(code, fix_name, reason)
+
+                    log_content = f"【小市值套利触发】{code:<12} {short_name} | 日内涨幅{day_pct:.2f}% | 关键词：{key_word}"
+                    write_arbitrage_log(log_content)
+                    # 写入持仓监控文件
+                    save_stocks_to_position_txt(code, short_name)
+                    # 标记已记录，当日不再重复触发
+                    record_set.add(code)
+            time.sleep(2)
+            continue
+
+        # 非监控时段休眠
+        time.sleep(2)
+
+    write_arbitrage_log("========== 小市值套利监控线程停止 ==========\n")
     
 
-def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
+def run(pool, smallstock_pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
     #key_word = get_stock_reason_keyword("301269.SZ", "华大九天", 14.05)
     #print(key_word)
@@ -2427,6 +2576,8 @@ def run(pool, cond1_stocks, cond2_stocks, cond3_stocks):
     time.sleep(0.5)
     #创建线程，用于计算成交额排行前20的股票，每隔20秒计算一次
     threading.Thread(target=amount_rank_monitor_thread, args=(pool, is_running), daemon=True).start()
+    time.sleep(0.5)
+    threading.Thread(target=small_stock_arbitrage_monitor, args=(smallstock_pool, is_running), daemon=True).start()
     time.sleep(0.5)
 
    
@@ -2491,6 +2642,7 @@ THREAD_HEARTBEAT = {
     "common_drawdown_monitor": datetime.min, 
     "position_monitor": datetime.min,
     "amount_rank": datetime.min,
+    "small_arbitrage": datetime.min,
 }
 # 线程超时判定阈值：超过15秒无心跳判定线程卡死
 THREAD_TIMEOUT_SEC = 15
@@ -2710,11 +2862,14 @@ if __name__ == "__main__":
         # 4. 下载板块基础数据
         xtdata.download_sector_data()
         # 5. 获取全市场A股列表
-        all_a_shares = xtdata.get_stock_list_in_sector("沪深A股")
+        #all_a_shares = xtdata.get_stock_list_in_sector("沪深A股")
+        all_a_shares = xtdata.get_stock_list_in_sector("沪深京A股")
         print(f"✅ 全市场A股总数：{len(all_a_shares)} 只")
         # 6. 基础风控过滤，生成候选股票池
         stock_pool = [s for s in all_a_shares if basic_filter(s)]
+        smallstock_pool = [s for s in all_a_shares if basic_filter2(s)]
         print(f"✅ 风控过滤后候选股票池：{len(stock_pool)} 只")
+        print(f"✅ 科创板和北交所小市值：{len(smallstock_pool)} 只")
         # 7. 批量下载近6天日线（仅未缓存标的）
         print("✅ 正在批量加载近10天日线数据...")
         batch_download_history(stock_pool, days=10)
@@ -2729,7 +2884,7 @@ if __name__ == "__main__":
         # 11. 日志过滤、将一天的量价突破日志和容量冲高回落日志中的代码提取出来
         parse_log_stock_filter_with_name()
         # 12. 启动主策略循环（后台线程+定时选股）
-        run(stock_pool, cond1, cond2, cond3)
+        run(stock_pool, smallstock_pool, cond1, cond2, cond3)
     except KeyboardInterrupt:
         print("\n⚠️ 用户主动终止程序")
 
