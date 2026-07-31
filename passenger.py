@@ -2436,7 +2436,7 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
     小市值套利监控线程【修复时段逻辑版】
     规则：
     1. 9:30 ~ 9:40 持续筛选存入缓存BasicSetCache：
-       - 开盘涨跌幅 -3% < open_pct < 3%
+       - 开盘涨跌幅 -5% < open_pct < 5%
        - 9:35前 日内最高价涨幅 < 10%
        - 9:35~9:40 日内最高价涨幅 < 15%
     2. 9:41 ~ 10:59 仅读取缓存内标的，判断日内涨幅>11%
@@ -2487,8 +2487,8 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
                 pre_close = tick_info["pre_close"]
                 high_price = tick_info["high"]
 
-                # 条件1：开盘涨跌幅 -3% ~ 3%
-                if not (-3 < open_pct < 3):
+                # 条件1：开盘涨跌幅 -5% ~ 5%
+                if not (-5 < open_pct < 5):
                     continue
                 if pre_close <= 0:
                     continue
