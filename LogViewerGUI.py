@@ -55,7 +55,6 @@ class QuantLogPanel:
         self.root.title("监控面板")
         self.root.geometry("1280x768")
         self.root.resizable(True, True)
-
         # ========== 【全新专业看盘级配色体系 - 通达信商务深灰风】 ==========
         MAIN_BG = "#1A202C"          # 主窗口底色 高级深灰
         PANEL_BG = "#232B38"         # 面板容器底色
@@ -63,9 +62,10 @@ class QuantLogPanel:
         TEXT_TITLE = "#F1F5F9"       # 分区标题高亮白字
         CURSOR_COLOR = "#94A3B8"     # 光标柔和灰
         CHART_BG = "#1E2633"         # 分时图表专用底色
-        LINE_GRAY = "#0867EC"        # 量价突破中性灰线
+        LINE_GRAY = "#0867EC"        # 量价突破中性蓝线
         LINE_WHITE = "#E2E8F0"       # 冲高回落主走势亮白线
         LINE_TOP20 = "#FBBF24"       # Top20统计黄金色
+        LINE_ARBITRAGE = "#F472B6"   # 小盘套利粉色曲线
         AXIS_COLOR = "#475569"       # 坐标轴暗灰
         TEXT_CHART_COLOR = "#94A3B8" # 图表刻度文字
         RISE_RED = "#EF4444"         # 行情标准上涨红
@@ -81,6 +81,7 @@ class QuantLogPanel:
         self.LINE_GRAY = LINE_GRAY
         self.LINE_WHITE = LINE_WHITE
         self.LINE_TOP20 = LINE_TOP20
+        self.LINE_ARBITRAGE = LINE_ARBITRAGE
         self.AXIS_COLOR = AXIS_COLOR
         self.TEXT_CHART_COLOR = TEXT_CHART_COLOR
         self.RISE_RED = RISE_RED
@@ -92,8 +93,7 @@ class QuantLogPanel:
         self.last_scroll_time = 0
         self.file_read_pos = {k: 0 for k in LOG_FILE_MAP.keys()}
         self.running_flag = True
-
-        # 分时图数据缓存
+        # 分时图数据缓存 (元组：minute, tm_str, break, fall, top20, arbitrage)
         self.chart_data = []
         self.tip_win = None
         self.tip_label = None
@@ -202,11 +202,10 @@ class QuantLogPanel:
         s5 = ttk.Scrollbar(left_log_frame, command=self.t5.yview)
         s5.pack(side=tk.RIGHT, fill=tk.Y)
         self.t5.config(yscrollcommand=s5.set)
-
-        # 右侧：专业分时图画布
+        # 右侧：专业分时图画布【更新图例：新增粉色小盘套利】
         chart_frame = tk.Frame(bottom_pane, bg=PANEL_BG, bd=0)
         bottom_pane.add(chart_frame, weight=12)
-        tk.Label(chart_frame, text="市场强度分时图(白=冲高回落 蓝=量价突破 黄=成交Top20平均回撤)",
+        tk.Label(chart_frame, text="市场强度分时图(蓝=量价突破 白=冲高回落 黄=成交Top20平均回撤 粉=小盘套利平均涨幅)",
                  fg=self.TEXT_TITLE, bg=PANEL_BG, font=("微软雅黑", TITLE_FONT_SIZE-1, "bold")).pack(anchor="nw", padx=2, pady=1)
         self.chart_canvas = tk.Canvas(chart_frame, bg=self.CHART_BG, bd=0, highlightthickness=0)
         self.chart_canvas.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
@@ -255,8 +254,7 @@ class QuantLogPanel:
         self.chart_canvas.bind("<Leave>", self.on_chart_leave)
 
         self.root.after(200, self.draw_chart)
-
-    # ====================== 工具方法（完全无修改） ======================
+    # ====================== 工具方法（修复解析逻辑，兼容无套利日志） ======================
     def time_to_minute(self, time_str):
         h, m = map(int, time_str.split(":"))
         return h * 60 + m
@@ -270,23 +268,24 @@ class QuantLogPanel:
         break_reg = re.compile(r'昨量价突破.*?([+-]?\d+\.?\d+)%')
         fall_reg = re.compile(r'昨冲高回落.*?([+-]?\d+\.?\d+)%')
         top20_reg = re.compile(r'Top20.*?([+-]?\d+\.?\d+)%')
-
+        arbitrage_reg = re.compile(r'昨小市值套利组.*?([+-]?\d+\.?\d+)%')
         curr_time = None
         brk_val = None
         fall_val = None
         top_val = None
-
+        arb_val = 0.0  # 无匹配时默认0，不阻塞数据存储
         for line in lines:
             line = line.strip()
             if not line:
                 continue
             t_match = time_reg.search(line)
             if t_match:
+                # 仅校验原有三个必填指标，套利字段可选
                 if curr_time and brk_val is not None and fall_val is not None and top_val is not None:
-                    temp_dict[curr_time] = (brk_val, fall_val, top_val)
+                    temp_dict[curr_time] = (brk_val, fall_val, top_val, arb_val)
                 curr_time = t_match.group(1)
                 brk_val = fall_val = top_val = None
-
+                arb_val = 0.0
             bm = break_reg.search(line)
             if bm:
                 brk_val = float(bm.group(1))
@@ -296,15 +295,17 @@ class QuantLogPanel:
             tm = top20_reg.search(line)
             if tm:
                 top_val = float(tm.group(1))
-
+            am = arbitrage_reg.search(line)
+            if am:
+                arb_val = float(am.group(1))
+        # 保存最后一组时间切片
         if curr_time and brk_val is not None and fall_val is not None and top_val is not None:
-            temp_dict[curr_time] = (brk_val, fall_val, top_val)
-
-        for tm_str, (b, f, t) in temp_dict.items():
+            temp_dict[curr_time] = (brk_val, fall_val, top_val, arb_val)
+        # 组装绘图数据元组
+        for tm_str, (b, f, t, a) in temp_dict.items():
             minute = self.time_to_minute(tm_str)
             if MORNING_START <= minute <= AFTER_END:
-                res.append((minute, tm_str, b, f, t))
-
+                res.append((minute, tm_str, b, f, t, a))
         res.sort(key=lambda x: x[0])
         return res
 
@@ -316,8 +317,7 @@ class QuantLogPanel:
             if (item[0], item[1]) not in exist_keys:
                 self.chart_data.append(item)
         self.chart_data.sort(key=lambda x: x[0])
-
-    # ====================== 分时图绘制（仅色调变更，绘制逻辑完全不变） ======================
+    # ====================== 分时图绘制（新增粉色套利曲线，值域包含套利数据） ======================
     def draw_chart(self):
         canvas = self.chart_canvas
         cw = canvas.winfo_width()
@@ -350,7 +350,8 @@ class QuantLogPanel:
             y_break = [d[2] for d in self.chart_data]
             y_fall = [d[3] for d in self.chart_data]
             y_top20 = [d[4] for d in self.chart_data]
-            y_all = y_break + y_fall + y_top20
+            y_arbitrage = [d[5] for d in self.chart_data]
+            y_all = y_break + y_fall + y_top20 + y_arbitrage
             min_y, max_y = min(y_all), max(y_all)
             ry = max_y - min_y
             min_y -= ry * 0.15
@@ -386,22 +387,24 @@ class QuantLogPanel:
         zero_y = v2y(0)
         if pad < zero_y < ch-pad:
             canvas.create_line(pad, zero_y, cw-pad, zero_y, fill="#64748B", width=1.2, dash=(2,2), tag="chart_item")
-
-        # 三条曲线绘制逻辑完全不变
+        # 四条曲线绘制
         if len(self.chart_data) >= 2:
-            # 灰线：量价突破
+            # 1.蓝线：量价突破
             pts = [(time_to_valid_x(d[0]), v2y(d[2])) for d in self.chart_data]
             for i in range(len(pts)-1):
                 canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_GRAY, width=LINE_WIDTH, tag="chart_item")
-            # 白线：冲高回落(主走势线)
+            # 2.白线：冲高回落
             pts = [(time_to_valid_x(d[0]), v2y(d[3])) for d in self.chart_data]
             for i in range(len(pts)-1):
                 canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_WHITE, width=LINE_WIDTH+0.2, tag="chart_item")
-            # 黄金线：Top20均价回撤
+            # 3.黄线：Top20均价回撤
             pts = [(time_to_valid_x(d[0]), v2y(d[4])) for d in self.chart_data]
             for i in range(len(pts)-1):
                 canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_TOP20, width=LINE_WIDTH, tag="chart_item")
-
+            # 4.粉色线：小盘套利平均涨幅
+            pts = [(time_to_valid_x(d[0]), v2y(d[5])) for d in self.chart_data]
+            for i in range(len(pts)-1):
+                canvas.create_line(pts[i][0],pts[i][1],pts[i+1][0],pts[i+1][1], fill=self.LINE_ARBITRAGE, width=LINE_WIDTH, tag="chart_item")
         self._chart_x_map = [(time_to_valid_x(d[0]), d) for d in self.chart_data]
         self._get_x_pos_func = time_to_valid_x
         self._get_y_range = (min_y, max_y)
@@ -448,7 +451,6 @@ class QuantLogPanel:
             risk_x = time_to_valid_x(first_risk_pos[0])
             risk_y = v2y(first_risk_pos[2])
             canvas.create_oval(risk_x-3, risk_y-3, risk_x+3, risk_y+3, fill=VolPriceBreak_Color, outline=VolPriceBreak_Color, tag="chart_item")
-            # 动态居中中上位置，随窗口自适应
             tip_x = pad + inner_w * 0.4
             tip_y = pad + inner_h * 0.1
             warn_text = "昨量价齐升超预期" if VolPriceBreak_up_or_down==1 else f"昨量价齐升不及预期"
@@ -496,8 +498,7 @@ class QuantLogPanel:
         if pad < x < right and top < y < bottom:
             self.chart_canvas.create_line(x, top, x, bottom, fill=CROSS_LINE_COLOR,dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
             self.chart_canvas.create_line(pad, y, right, y, fill=CROSS_LINE_COLOR,dash=CROSS_DASH_STYLE, width=1, tag=self.cross_tag)
-
-    # ====================== 鼠标事件（无任何修改） ======================
+    # ====================== 鼠标悬浮提示（增加套利数值展示，弹窗尺寸适配） ======================
     def on_chart_enter(self, event):
         self.mouse_in_chart = True
         self.mouse_x = event.x
@@ -533,17 +534,16 @@ class QuantLogPanel:
                 near_data = data
         if not near_data or min_dis > 20:
             return
-
-        _, hhmm, break_rate, fall_rate, top20_dd = near_data
+        _, hhmm, break_rate, fall_rate, top20_dd, arbitrage_rate = near_data
         text = (f"交易时间：{hhmm}\n"
-                f"量价突破强度：{break_rate:.2f}%\n"
-                f"冲高回落幅度：{fall_rate:.2f}%\n"
-                f"Top20平均回撤：{top20_dd:.2f}%")
+                f"昨量价突破强度：{break_rate:.2f}%\n"
+                f"昨冲高回落幅度：{fall_rate:.2f}%\n"
+                f"Top20平均回撤：{top20_dd:.2f}%\n"
+                f"昨小盘套利平均涨幅：{arbitrage_rate:.2f}%")
         self.tip_label.config(text=text)
-
         win_x = self.chart_canvas.winfo_rootx() + x + 18
         win_y = self.chart_canvas.winfo_rooty() + y + 18
-        w, h = 155, 70
+        w, h = 175, 90
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         if win_x + w > sw:
@@ -569,8 +569,7 @@ class QuantLogPanel:
                 time.sleep(CHART_REFRESH_INTERVAL)
                 self.root.after_idle(self.draw_chart)
         threading.Thread(target=loop, daemon=True).start()
-
-    # ====================== 日志窗口全部原生逻辑不动 ======================
+    # ====================== 日志窗口读取、滚动、线程逻辑完全不变 ======================
     def limit_log_lines(self, text_widget):
         cnt = int(text_widget.index(tk.END).split('.')[0])
         if cnt > MAX_LOG_LINES:
@@ -612,8 +611,7 @@ class QuantLogPanel:
     def log_position(self, msg):self.safe_append_log(self.t4, msg)
     def log_system(self, msg):self.safe_append_log(self.t5, msg)
     def log_abnormal(self, msg):self.safe_append_log(self.t6, msg)
-    def log_arbitrage(self, msg):self.safe_append_log(self.t7, msg) 
-
+    def log_arbitrage(self, msg):self.safe_append_log(self.t7, msg)
     def get_text_widget(self, k):
         m = {"t1":self.t1,"t2":self.t2,"t3":self.t3,"t4":self.t4,"t5":self.t5,"t6":self.t6,"t7":self.t7}
         return m.get(k)

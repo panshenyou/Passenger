@@ -81,6 +81,7 @@ CACHE_FILE = os.path.join(CACHE_PATH, "Downloaded_Stocks.json")
 WATCH_LIST_PATH = os.path.join(CACHE_PATH, "WatchList.txt")
 FILE_BREAK = os.path.join(CACHE_PATH, "VolPriceBreak.txt")
 FILE_DRAWDOWN = os.path.join(CACHE_PATH, "CommonDrawdown.txt")
+SMALL_ARBITRAGE = os.path.join(CACHE_PATH, "SmallArbitrage.txt")
 
 # 日志文件
 STRONG_LOG_PATH = os.path.join(LOG_PATH, "Log_StrongStock.txt")
@@ -97,6 +98,9 @@ POSITION_STOCK_TXT = os.path.join(CONFIG_PATH, "Position_Stock.txt")
 #大模型 1-deepseek  2-qwen
 DEEPSEEK_INDEX = 1
 QWEN_INDEX = 2
+
+# 昨日强势股日志，列数
+YESTERDAY_STRENGTH_COL = 8
 
 # 全局存储：实时成交额TOP20 [(成交额,代码,名称),...]
 AMOUNT_TOP20_LIST = []
@@ -2213,6 +2217,7 @@ def stock_group_strength_monitor():
 
         break_stocks = get_watch_stock_list(FILE_BREAK)
         down_stocks = get_watch_stock_list(FILE_DRAWDOWN)
+        small_stocks = get_watch_stock_list(SMALL_ARBITRAGE)
         now_time = time.strftime("%Y-%m-%d %H:%M", time.localtime())
 
         # 放量突破组 排序逻辑不变
@@ -2230,6 +2235,14 @@ def stock_group_strength_monitor():
             down_info.append((rise, code, name))
         down_info.sort(reverse=True, key=lambda x: x[0])
         down_avg = round(sum(i[0] for i in down_info)/len(down_info),2) if down_info else 0.0
+
+        # 小市值套利 排序逻辑不变
+        small_info = []
+        for code, name in small_stocks:
+            rise = get_single_stock_rise(code)
+            small_info.append((rise, code, name))
+        small_info.sort(reverse=True, key=lambda x: x[0])
+        small_avg = round(sum(i[0] for i in small_info)/len(small_info),2) if small_info else 0.0
 
         # 成交额Top20组 排序逻辑不变
         top20_info = []
@@ -2257,7 +2270,7 @@ def stock_group_strength_monitor():
 
         # 四列竖排 先下后右
         def make_align_text(data_list):
-            col = 6
+            col = YESTERDAY_STRENGTH_COL
             total = len(data_list)
             if total == 0:
                 return ""
@@ -2276,6 +2289,7 @@ def stock_group_strength_monitor():
 
         break_show = make_align_text(break_info)
         down_show = make_align_text(down_info)
+        small_info = make_align_text(small_info)
         top20_show = make_align_text(top20_info)
 
         # 拼接日志
@@ -2283,12 +2297,19 @@ def stock_group_strength_monitor():
         log_txt += f"\n【昨量价突破组】共{len(break_stocks)}只 | 平均涨幅：{break_avg}%"
         if break_show:
             log_txt += f"\n{break_show}"
+
         log_txt += f"\n【昨冲高回落组】共{len(down_stocks)}只 | 平均涨幅：{down_avg}%"
         if down_show:
             log_txt += "\n" + down_show
+
+        log_txt += f"\n【昨小市值套利组】共{len(small_stocks)}只 | 平均涨幅：{small_avg}%"
+        if small_info:
+            log_txt += "\n" + small_info
+
         log_txt += f"\n【今成交Top20组】共{len(AMOUNT_TOP20_LIST)}只 | 平均最高回撤：{top20_avg}%"
         if top20_show:
             log_txt += "\n" + top20_show
+
         log_txt += "\n"
 
         append_strength_log(log_txt)
@@ -2310,7 +2331,7 @@ def parse_log_stock_filter_with_name():
         return os.path.exists(file_path)
 
     # 改成只判断文件存在就跳过，不管里面空不空
-    if file_is_exist(FILE_BREAK) and file_is_exist(FILE_DRAWDOWN):
+    if file_is_exist(FILE_BREAK) and file_is_exist(FILE_DRAWDOWN) and file_is_exist(SMALL_ARBITRAGE):
         print("📄 文件已存在，跳过生成，保留原有内容")
         return
     # ======================================================================
@@ -2336,16 +2357,20 @@ def parse_log_stock_filter_with_name():
     # 读取两组 (code, name)
     vol_set = read_code_name_set(VOL_BREAK_LOG_PATH)
     down_set = read_code_name_set(COMMON_DRAWDOWN_LOG_PATH)
+    small_set = read_code_name_set(SMALL_ARBITRAGE_LOG_PATH)
 
     # 只按 code 去重（名称跟着 code 走）
     vol_codes = {c for c, n in vol_set}
     down_codes = {c for c, n in down_set}
+    #small_codes = {c for c, n in small_set}
     inter_codes = vol_codes & down_codes
 
     # 放量股：不在交集里的
     pure_vol = [(c, n) for c, n in vol_set if c not in inter_codes]
     # 回落股：全部
     all_down = [(c, n) for c, n in down_set]
+    # 小市值套利
+    small_stock = [(c, n) for c, n in small_set]
 
     # 写入 VolPriceBreak.txt
     with open(FILE_BREAK, "w", encoding="utf-8") as f:
@@ -2357,7 +2382,12 @@ def parse_log_stock_filter_with_name():
         for c, n in sorted(all_down):
             f.write(f"{c} {n}\n")
 
-    print(f"✅ 写入完成 | 量价齐升股：{len(pure_vol)} 只 | 容量冲高回落股：{len(all_down)} 只")
+    # 写入 SmallArbitrage.txt
+    with open(SMALL_ARBITRAGE, "w", encoding="utf-8") as f:
+        for c, n in sorted(small_stock):
+            f.write(f"{c} {n}\n")
+
+    print(f"✅ 写入完成 | 量价齐升股：{len(pure_vol)} 只 | 容量冲高回落股：{len(all_down)} 只 | 小市值套利股：{len(small_stock)} 只")
 
 
 def calc_stock_amount_rank(stock_pool):
