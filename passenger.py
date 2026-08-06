@@ -100,7 +100,9 @@ DEEPSEEK_INDEX = 1
 QWEN_INDEX = 2
 
 # 昨日强势股日志，列数
-YESTERDAY_STRENGTH_COL = 8
+YESTERDAY_STRENGTH_COL = 7
+# 持仓监视
+POSTION_COL = 5
 
 # 全局存储：实时成交额TOP20 [(成交额,代码,名称),...]
 AMOUNT_TOP20_LIST = []
@@ -1899,130 +1901,102 @@ def load_position_stocks():
     # 最终只返回纯代码列表
     return pos_list
 
-def position_avg_price_monitor(is_running):
-    """
-    持仓股均价监控线程
-    规则：
-    1. 开盘后开始监控持仓股实时日内均价
-    2. 现价 < 日内均价 立刻开始计时
-    3. 跌破满5分钟未站上均价 → 提示卖出一半
-    4. 跌破满10分钟未站上均价 → 提示清仓全部
-    5. 10分钟后每间隔5分钟重复提示减仓
-    6. 一旦现价重新站上均价 → 清空计时，等待下次跌破重新计时
-    7. 提示同时输出终端 + 写入日志文件
-    """
-    
 
+
+def position_avg_price_monitor(is_running):
     # 统一日志函数：终端打印 + 文件写入
-    def write_pos_log(msg):
+    def write_pos_log(msg_list):
+        # 只保留时:分:秒，去除年月日
         t = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        full_msg = f"[{t}] {msg}"
-        # 打印到Python终端
-        #print(full_msg)
+        header = f"---------------------------------- 时间 [{t}] ----------------------------------\n"
+        full_msg = header + "\n".join(msg_list) + "\n"
         # 写入本地日志文件
         try:
             with open(POSITION_LOG_PATH, "a", encoding="utf-8") as f:
-                f.write(full_msg + "\n")
+                f.write(full_msg)
         except Exception:
             pass
+    write_pos_log(["========== 持仓股均价风控监控线程启动 =========="])
 
-    write_pos_log("========== 持仓股均价风控监控线程启动 ==========")
-    
-    
+    # ===================== 复制复用stock_group_strength_monitor的对齐工具函数，不污染全局 =====================
+    def get_fixed_cell(code, name, rise_pct):
+        # 固定4汉字宽度：超长截断，不足补全角空格
+        short_name = name[:4]
+        name_full = short_name.ljust(4, "　")
+        # 固定8字符总宽度，右对齐，包含符号、整数、小数点、两位小数、百分号
+        rise_str = f"{rise_pct:8.2%}"
+        return f"{name_full}{rise_str}"
+
+    def make_align_text(data_list, col_num):
+        """
+        data_list: [(涨跌幅, 代码, 名称), ...]
+        col_num: 分列数量（沿用全局POSTION_COL）
+        返回自动分行、多列对齐完整文本
+        排列规则：先横向从左往右填满一行，再下一行从上到下
+        """
+        total = len(data_list)
+        if total == 0:
+            return ""
+        row_total = (total + col_num - 1) // col_num
+        lines = []
+        for row_idx in range(row_total):
+            row_buf = []
+            for col_idx in range(col_num):
+                # 改动点：索引改为 行*列数 + 列，横向顺序填充
+                data_idx = row_idx * col_num + col_idx
+                if data_idx >= total:
+                    continue
+                val, code, n = data_list[data_idx]
+                row_buf.append(get_fixed_cell(code, n, val))
+            lines.append(" | ".join(row_buf))
+        return "\n".join(lines)
+    # =========================================================================================================
+
     while is_running[0]:
         THREAD_HEARTBEAT["position_monitor"] = datetime.now()
-        
+
         # 加载持仓列表
         pos_codes = load_position_stocks()
-
         if not pos_codes:
             time.sleep(2)
             continue
-
         now_dt = datetime.now()
-        # 直接取系统当前交易时间
         curr_hour = now_dt.hour
         curr_min = now_dt.minute
         # 只在交易时段监控
         if not is_trade_time(curr_hour, curr_min):
             continue
-
         time.sleep(2)
-        write_pos_log(f"------------------------------------")
+
+        # 收集：[(日内涨跌幅, 代码, 名称)] 格式，适配对齐工具
+        pos_data_list = []
         for code in pos_codes:
             tick = parse_tick_info(code)
             if not tick:
                 continue
-
-            # 固定4汉字宽度：超长截断，不足补空格
             name = tick['name']
-            short_name = name[:4]
-            fixed_name = short_name.ljust(4, "　")
-
-            code_name = f"{code} {fixed_name}"
-            now_price = tick["now"]
-
-            # ========== 正确计算日内成交均价 ==========
-            full_tick = xtdata.get_full_tick([code]).get(code, {})
-            total_vol_hand = full_tick.get("volume", 0.0)
-            total_amt = full_tick.get("amount", 0.0)
-  
-            if total_vol_hand <= 0:
-                continue
-            avg_price = total_amt / (total_vol_hand * 100)
-            # =========================================
             now_price = tick["now"]
             pre_close = tick["pre_close"]
             today_pct = (now_price - pre_close) / pre_close
-            write_pos_log(f"【{code_name}】 涨跌幅 {today_pct:.2%}")
-            
-            # 只在交易时段监控，下面的逻辑目前先不执行
-            if not is_trade_time4(curr_hour, curr_min):
+
+            # 原有均价计算逻辑完全保留，不做任何修改
+            full_tick = xtdata.get_full_tick([code]).get(code, {})
+            total_vol_hand = full_tick.get("volume", 0.0)
+            total_amt = full_tick.get("amount", 0.0)
+            if total_vol_hand <= 0:
                 continue
+            avg_price = total_amt / (total_vol_hand * 100)
 
-            # 现价站上均价 清除计时
-            if now_price >= avg_price:
-                if code in POSITION_TIMER_MAP:
-                    del POSITION_TIMER_MAP[code]
-                    write_pos_log(f"【持仓风控提醒】{code_name} 现价站上日内均价，取消下跌计时")
-                continue
+            # 仅存入对齐需要的三元组，均价计算逻辑保留但不参与排版
+            pos_data_list.append((today_pct, code, name))
 
-            # 首次跌破均价 初始化计时
-            if code not in POSITION_TIMER_MAP:
-                POSITION_TIMER_MAP[code] = {
-                    "start_time": now_dt,
-                    "tip_half": False,
-                    "tip_all": False,
-                    "last_tip_time": now_dt
-                }
-                write_pos_log(f"【持仓风控提醒】{code_name} 现价跌破日内均价，开始下跌计时")
+        # 调用统一对齐函数，列数沿用全局POSTION_COL
+        col_count = POSTION_COL
+        align_content = make_align_text(pos_data_list, col_count)
+        if align_content:
+            write_pos_log([align_content])
 
-            timer_info = POSITION_TIMER_MAP[code]
-            # 计算跌破持续分钟数
-            dur_min = (now_dt - timer_info["start_time"]).total_seconds() / 60
-
-            # 跌破满5分钟 提示卖出一半
-            if dur_min >= 5 and not timer_info["tip_half"]:
-                write_pos_log(f"【持仓风控提醒】{code_name} 跌破均价已5分钟，建议卖出一半")
-                timer_info["tip_half"] = True
-                timer_info["last_tip_time"] = now_dt
-
-            # 跌破满10分钟 提示全部清仓
-            elif dur_min >= 10 and not timer_info["tip_all"]:
-                write_pos_log(f"【持仓风控提醒】{code_name} 跌破均价已10分钟，建议全部清仓")
-                timer_info["tip_all"] = True
-                timer_info["last_tip_time"] = now_dt
-
-            # 满10分钟后 每5分钟重复提醒
-            elif dur_min >= 10:
-                gap_min = (now_dt - timer_info["last_tip_time"]).total_seconds() / 60
-                if gap_min >= 5:
-                    write_pos_log(f"【持仓持续弱势】{code_name} 长期低于均价运行，持续规避风险")
-                    timer_info["last_tip_time"] = now_dt
-
-        time.sleep(2)
-
-    write_pos_log("========== 持仓股均价风控监控线程停止 ==========\n")
+    write_pos_log(["========== 持仓股均价风控监控线程停止 ==========\n"])
 
 def split_and_save_log(key_word: str):
     if "|" not in key_word:
@@ -2218,7 +2192,7 @@ def stock_group_strength_monitor():
         break_stocks = get_watch_stock_list(FILE_BREAK)
         down_stocks = get_watch_stock_list(FILE_DRAWDOWN)
         small_stocks = get_watch_stock_list(SMALL_ARBITRAGE)
-        now_time = time.strftime("%Y-%m-%d %H:%M", time.localtime())
+        now_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
         # 放量突破组 排序逻辑不变
         break_info = []
@@ -2263,7 +2237,7 @@ def stock_group_strength_monitor():
             # 固定4汉字宽度：超长截断，不足补空格
             short_name = name[:4]
             name_full = short_name.ljust(4, "　")
-            # 涨幅固定格式 正负统一 保留2位小数
+            # 固定8字符总宽度，右对齐，包含符号、整数、小数点、两位小数、百分号
             rise_str = f"{rise:6.2f}%"
             # 拼接成固定长度单元格
             return f"{name_full}{rise_str}"
@@ -2279,7 +2253,8 @@ def stock_group_strength_monitor():
             for r in range(row):
                 row_buf = []
                 for c in range(col):
-                    idx = r + c * row
+                    # 改动点：索引改为 行*列数 + 列，横向顺序填充
+                    idx = r * col + c
                     if idx >= total:
                         continue
                     val, _, n = data_list[idx]
@@ -2293,20 +2268,20 @@ def stock_group_strength_monitor():
         top20_show = make_align_text(top20_info)
 
         # 拼接日志
-        log_txt = f"—————————— {now_time} 昨筛选强度监控 ——————————"
-        log_txt += f"\n【昨量价突破组】共{len(break_stocks)}只 | 平均涨幅：{break_avg}%"
+        log_txt = f"---------------------------------- 时间 [{now_time}] ----------------------------------"
+        log_txt += f"\n[ 昨量价突破组 共{len(break_stocks)}只 平均涨幅：{break_avg}% ]"
         if break_show:
             log_txt += f"\n{break_show}"
-
-        log_txt += f"\n【昨冲高回落组】共{len(down_stocks)}只 | 平均涨幅：{down_avg}%"
+        
+        log_txt += f"\n[ 昨冲高回落组 共{len(down_stocks)}只 平均涨幅：{down_avg}% ]"
         if down_show:
             log_txt += "\n" + down_show
-
-        log_txt += f"\n【昨小市值套利组】共{len(small_stocks)}只 | 平均涨幅：{small_avg}%"
+        
+        log_txt += f"\n[ 昨小市值套利 共{len(small_stocks)}只 平均涨幅：{small_avg}% ]"
         if small_info:
             log_txt += "\n" + small_info
-
-        log_txt += f"\n【今成交Top20组】共{len(AMOUNT_TOP20_LIST)}只 | 平均最高回撤：{top20_avg}%"
+        
+        log_txt += f"\n[ 今成交Top20 共{len(AMOUNT_TOP20_LIST)}只 最高回撤：{top20_avg}% ]"
         if top20_show:
             log_txt += "\n" + top20_show
 
@@ -2589,7 +2564,7 @@ def run(pool, smallstock_pool, cond1_stocks, cond2_stocks, cond3_stocks):
     
 
     is_running = [True]
-    # 启动持仓股均价监控线程，打印到终端和日志，9.30~9:46
+    # 启动持仓股均价监控线程，打印到终端和日志
     threading.Thread(target=position_avg_price_monitor, args=(is_running,), daemon=True).start()
     time.sleep(0.5)
     # 启动强势股监控线程，打印到日志，全天
@@ -2607,6 +2582,7 @@ def run(pool, smallstock_pool, cond1_stocks, cond2_stocks, cond3_stocks):
     #创建线程，用于计算成交额排行前20的股票，每隔20秒计算一次
     threading.Thread(target=amount_rank_monitor_thread, args=(pool, is_running), daemon=True).start()
     time.sleep(0.5)
+    #创建线程，监控科创板，创业板，北交所小市值票
     threading.Thread(target=small_stock_arbitrage_monitor, args=(smallstock_pool, is_running), daemon=True).start()
     time.sleep(0.5)
 
