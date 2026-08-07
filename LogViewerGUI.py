@@ -539,7 +539,7 @@ class QuantLogPanel:
         with open(NOTE_SAVE_PATH_1, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         self.note1_modified = False
-        messagebox.showinfo("保存成功", "复盘笔记已保存")
+
 
     def load_replay_note1(self):
         if not os.path.exists(NOTE_SAVE_PATH_1):
