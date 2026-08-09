@@ -658,7 +658,7 @@ class QuantLogPanel:
         with open(NOTE_SAVE_PATH_2, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         self.note2_modified = False
-        messagebox.showinfo("保存成功", "情绪周期已保存")
+        #messagebox.showinfo("保存成功", "情绪周期已保存")
 
     def load_replay_note2(self):
         if not os.path.exists(NOTE_SAVE_PATH_2):

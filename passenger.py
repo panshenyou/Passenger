@@ -1094,7 +1094,7 @@ def basic_filter(stock):
         price = get_now_price(stock)
         float_mv = info.get("FloatVolume", 0) * price
         # 流通市值低于100亿过滤
-        if float_mv <= 12000000000:
+        if float_mv < 10000000000:
             return False
         up = info.get("UpStopPrice", 0)
         down = info.get("DownStopPrice", 0)
@@ -1125,7 +1125,7 @@ def basic_filter2(stock):
         price = get_now_price(stock)
         float_mv = info.get("FloatVolume", 0) * price
         # 流通市值低于100亿过滤
-        if float_mv >= 5000000000:
+        if float_mv >= 10000000000:
             return False
         up = info.get("UpStopPrice", 0)
         down = info.get("DownStopPrice", 0)
@@ -1771,8 +1771,8 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                 day_pct = tick_info["day_pct"]
                 today_amount = tick_info["amount"] 
                             
-                # 成交额大于20亿
-                if not (20 * 10**8 < today_amount):
+                # 成交额大于10亿
+                if not (10 * 10**8 < today_amount):
                     continue
 
                 open_pct = tick_info["open_pct"]  
@@ -2018,7 +2018,7 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
     1. 仅遍历自定义股票池pool
     2. 排除 cond1 / cond2 / cond3 三类个股
     3. 今日涨幅 ＞11% 且 ＜16%
-    4. 当日成交额 20亿 ~ 50亿
+    4. 当日成交额 10亿 ~ 50亿
     5. 含今日在内三日累计涨跌幅 ＜20%
     6. 10点之后开始监测
     7. 个股只输出一次，终端打印+同步写入日志文件
@@ -2078,8 +2078,8 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 today_pct = (now_price - pre_close) / pre_close
                 if not (0.11 < today_pct < 0.16):
                     continue
-                # 成交额20亿 - 50亿
-                if not (20 * 10**8 < today_amount < 50 * 10**8):
+                # 成交额10亿 - 50亿
+                if not (10 * 10**8 < today_amount < 50 * 10**8):
                     continue
                 
                 df = xtdata.get_market_data(
@@ -2483,7 +2483,6 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
 
         # ========== 阶段1：9:30 ~ 9:40 持续筛选，存入缓存 ==========
         if curr_h == 9 and 30 <= curr_m <= 40:
-            print(BasicSetCache)
             for code in smallstock_pool:
                 tick_info = parse_tick_info(code)
                 if not tick_info:
@@ -2559,30 +2558,27 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
 
 def run(pool, smallstock_pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
-    #key_word = get_stock_reason_keyword("301269.SZ", "华大九天", 14.05)
-    #print(key_word)
-    
 
     is_running = [True]
-    # 启动持仓股均价监控线程，打印到终端和日志
+    # 启动【持仓股均价】监控线程，打印到终端和日志
     threading.Thread(target=position_avg_price_monitor, args=(is_running,), daemon=True).start()
     time.sleep(0.5)
-    # 启动强势股监控线程，打印到日志，全天
+    # 启动【强势股>35%】监控线程，打印到日志，全天
     threading.Thread(target=strong_stock_pullback_strategy, args=(cond1_stocks, cond2_stocks, cond3_stocks, is_running), daemon=True).start()
     time.sleep(0.5)
-    # 启动容量冲高回落监测线程，打印到终端和日志，全天
+    # 启动【容量冲高回落】监测线程，打印到终端和日志，全天
     threading.Thread(target=common_stock_high_drawdown_monitor, args=(pool, cond1_stocks, cond2_stocks, cond3_stocks, is_running), daemon=True).start()
     time.sleep(0.5)
-    # 启动量价齐升个股监测线程，打印到终端和日志，10.00~
+    # 启动【容量量价齐升】监测线程，打印到终端和日志，10.00~
     threading.Thread(target=volume_break_start_monitor, args=(is_running, pool, cond1_stocks, cond2_stocks, cond3_stocks), daemon=True).start()
     time.sleep(0.5)
-    #启动昨日筛选股票监控线程，打印到日志，全天
+    # 启动【昨日筛选股票】监控线程，打印到日志，全天
     threading.Thread(target=stock_group_strength_monitor, daemon=True).start()
     time.sleep(0.5)
-    #创建线程，用于计算成交额排行前20的股票，每隔20秒计算一次
+    # 启动【成交额排行前20】监控线程，每隔20秒计算一次
     threading.Thread(target=amount_rank_monitor_thread, args=(pool, is_running), daemon=True).start()
     time.sleep(0.5)
-    #创建线程，监控科创板，创业板，北交所小市值票
+    # 启动【科创板，创业板，北交所小市值票】监控线程
     threading.Thread(target=small_stock_arbitrage_monitor, args=(smallstock_pool, is_running), daemon=True).start()
     time.sleep(0.5)
 
@@ -2872,8 +2868,8 @@ if __name__ == "__main__":
         all_a_shares = xtdata.get_stock_list_in_sector("沪深京A股")
         print(f"✅ 全市场A股总数：{len(all_a_shares)} 只")
         # 6. 基础风控过滤，生成候选股票池
-        stock_pool = [s for s in all_a_shares if basic_filter(s)]
-        smallstock_pool = [s for s in all_a_shares if basic_filter2(s)]
+        stock_pool = [s for s in all_a_shares if basic_filter(s)]         #流动市值大于100
+        smallstock_pool = [s for s in all_a_shares if basic_filter2(s)]   #流动市值小于100
         print(f"✅ 风控过滤后候选股票池：{len(stock_pool)} 只")
         print(f"✅ 科创板和北交所小市值：{len(smallstock_pool)} 只")
         # 7. 批量下载近6天日线（仅未缓存标的）
