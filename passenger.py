@@ -1468,7 +1468,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
     监控规则分三大模块：
     1. cond1双分支深度回撤告警（回撤幅度>6%触发）
         分支1：开盘区间-2%~+7%，开盘后冲高超开盘5%、前10分钟最低价未跌破开盘，9:40之后检测回撤
-        分支2：开盘区间-2%~+9.8%，个股在cond1，不在cond3池，仅9:30-9:40前10分钟检测回撤
+        分支2：开盘区间-2%~+3%，个股在cond1，不在cond3池，仅9:30-9:40前10分钟检测回撤
     2. cond2龙头横盘告警：日内涨跌幅维持-2%~+2%，状态变化记录, 暂时屏蔽
     3. cond3涨停大盘股高开跳水告警：开盘5%~10%，仅9:30-9:45前15分钟回撤>6%触发
     日志新增：每条信号附带当前日内实时涨幅
@@ -1567,8 +1567,8 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
                 # 修复原BUG：个股不能同时存在cond1和cond3池，原代码判断写反
                 branch2_not_both_pool = (code not in cond3_stocks)
                 #branch2_not_both_pool = 1
-                # 条件1：开盘涨跌幅区间 -2% ~ +9.8%
-                branch2_open_range = -2 <= open_pct <= 9.8
+                # 条件1：开盘涨跌幅区间 -2% ~ +3%
+                branch2_open_range = -2 <= open_pct <= 3
                 # 条件2：时间限制，仅9:30-9:40开盘前10分钟有效
                 branch2_time_ok = (hour == 9 and 30 <= minute <= 40)
                 # 分支2完整触发逻辑
