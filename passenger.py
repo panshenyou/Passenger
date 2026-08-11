@@ -1512,7 +1512,7 @@ def strong_stock_pullback_strategy(cond1_stocks, cond2_stocks, cond3_stocks, is_
         # 跨交易日自动清空开盘10分钟低价缓存，防止隔夜旧数据干扰判断
         if now_day != cache_date:
             stock_10min_low.clear()
-            cache_date = now_day
+            cache_date = now_day                                     
             write_log(f"【缓存重置】交易日切换，清空开盘10分钟低价缓存")
 
         try:
@@ -1772,7 +1772,7 @@ def common_stock_high_drawdown_monitor(stock_pool, cond1, cond2, cond3, is_runni
                 today_amount = tick_info["amount"] 
                             
                 # 成交额大于10亿
-                if not (10 * 10**8 < today_amount):
+                if not (20 * 10**8 < today_amount):
                     continue
 
                 open_pct = tick_info["open_pct"]  
@@ -2079,7 +2079,7 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 if not (0.11 < today_pct < 0.16):
                     continue
                 # 成交额10亿 - 50亿
-                if not (10 * 10**8 < today_amount < 50 * 10**8):
+                if not (20 * 10**8 < today_amount < 50 * 10**8):
                     continue
                 
                 df = xtdata.get_market_data(
@@ -2418,7 +2418,7 @@ def print_amount_top20():
 def amount_rank_monitor_thread(stock_pool, is_running):
     """成交额排行后台线程：每20秒刷新一次"""
     print("✅ 成交额TOP20统计线程已启动，每20秒自动刷新")
-
+    
     while is_running[0]:
         now_dt = datetime.now()
         # 直接取系统当前交易时间
@@ -2427,7 +2427,7 @@ def amount_rank_monitor_thread(stock_pool, is_running):
         # 只在交易时段监控
         if not is_trade_time(curr_hour, curr_min):
             continue
-
+        
         THREAD_HEARTBEAT["amount_rank"] = datetime.now()
         # 计算排行
         calc_stock_amount_rank(stock_pool)
