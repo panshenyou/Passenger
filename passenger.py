@@ -114,6 +114,7 @@ AMOUNT_RANK_INTERVAL = 30
 # =============================================================================
 cond1_stocks_value = 35      #条件1:5日涨幅 > cond1_stocks_value%
 cond2_stocks_value = 45      #条件2:5日涨幅 > cond2_stocks_value%
+cond3_stocks_value = 50
 
 # =============================================================================
 # 模块1：日线历史数据缓存下载（避免重复下载，提速启动）
@@ -1177,14 +1178,16 @@ def load_stock_from_txt(WATCH_LIST_PATH):
         pass
     return cond1, cond2, cond3
 
-def filter_strong_stocks_separate(pool):
+def filter_strong_stocks_separate(pool, smallstock_pool):
     """
-    分离三类强势股：
+    一、分离三类强势股：
     cond1_stocks：5日涨幅>cond1_stocks_value%
     cond2_stocks：5日涨幅>cond2_stocks_value%
     cond3_stocks：满足【昨涨停、前日不涨停、流通市值500亿以上】
     筛选结果同时输出控制台 + 写入固定路径WatchList.txt
     文件路径：C:/Users/15113/Desktop/QMT_Software/py/WatchList.txt
+    二、分离小市值强势股
+
     """
 
     SECTOR_NAME = "强势股池" 
@@ -1203,6 +1206,7 @@ def filter_strong_stocks_separate(pool):
     cond1_stocks = []
     cond2_stocks = []
     cond3_stocks = []
+    cond4_stocks = []
 
     def get_stock_name(code):
         """内部工具：统一获取股票名称，简化重复代码"""
@@ -1224,6 +1228,12 @@ def filter_strong_stocks_separate(pool):
 
             if rise5d > cond2_stocks_value:
                 cond2_stocks.append(stock)
+
+                # 固定4汉字宽度：超长截断，不足补空格
+                name_stock1 = get_stock_name(stock)
+                short_name1 = name_stock1[:4]
+                fix_name1 = short_name1.ljust(4, "　")
+                save_stocks_to_position_txt(stock, fix_name1)    #插入到持仓中
             if rise5d > cond1_stocks_value:
                 cond1_stocks.append(stock)
 
@@ -1241,6 +1251,35 @@ def filter_strong_stocks_separate(pool):
         except Exception:
             continue
 
+    for stock in smallstock_pool:
+            try:
+                df_dict = xtdata.get_market_data_ex(["close", "preClose"], [stock], period="1d", count=8)
+                
+                df = df_dict.get(stock)
+                if df is None or len(df) < 8:
+                    continue
+                close = df["close"].tolist()
+                base_price = close[-8]
+        
+                # 防除零保护
+                if base_price <= 0:
+                    continue
+    
+                preClose = df["preClose"].tolist()
+                rise8d = (close[-1] / close[-8] - 1) * 100
+    
+                if rise8d > cond3_stocks_value:
+                    cond4_stocks.append(stock)
+
+                    # 固定4汉字宽度：超长截断，不足补空格
+                    name_stock = get_stock_name(stock)
+                    short_name = name_stock[:4]
+                    fix_name = short_name.ljust(4, "　")
+                    save_stocks_to_position_txt(stock, fix_name)    #插入到持仓中
+                
+            except Exception:
+                continue
+
     # 控制台打印输出筛选结果
     print("\n" + "="*30)
     print(f"强势股统计:条件1={len(cond1_stocks)}只 | 条件2={len(cond2_stocks)}只 | 条件3={len(cond3_stocks)}只")
@@ -1256,6 +1295,11 @@ def filter_strong_stocks_separate(pool):
 
     print("\n条件3（昨涨停+流通市值500亿以上）")
     for c in cond3_stocks:
+        name = get_stock_name(c)
+        print(f"  {c} | {name}")
+
+    print("\n小市值7个交易日涨幅>50%")
+    for c in cond4_stocks:
         name = get_stock_name(c)
         print(f"  {c} | {name}")
     print("="*30 + "\n")
@@ -1279,6 +1323,11 @@ def filter_strong_stocks_separate(pool):
 
             f.write("\n条件3（昨涨停+流通市值500亿以上）\n")
             for c in cond3_stocks:
+                name = get_stock_name(c)
+                f.write(f"  {c} | {name}\n")
+
+            f.write("\n小市值7个交易日涨幅>50%\n")
+            for c in cond4_stocks:
                 name = get_stock_name(c)
                 f.write(f"  {c} | {name}\n")
 
@@ -2102,7 +2151,7 @@ def volume_break_start_monitor(is_running, pool, cond1_stocks, cond2_stocks, con
                 # 固定4汉字宽度：超长截断，不足补空格
                 short_name = name[:4]
                 fix_name = short_name.ljust(4, "　")
-
+                
                 key_word = get_stock_reason_keyword(code, name, today_pct, DEEPSEEK_INDEX)   #1-deepseek  2-qwen
                 reason = get_stock_reason_keyword(code, name, today_pct, QWEN_INDEX)   #1-deepseek  2-qwen
                 append_abnormalreason_log(code, fix_name, reason)
@@ -2440,16 +2489,18 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
     """
     小市值套利监控线程【修复时段逻辑版】
     规则：
-    1. 9:30 ~ 9:40 持续筛选存入缓存BasicSetCache：
+    1. 9:30 ~ 9:45 持续筛选存入缓存BasicSetCache：
        - 开盘涨跌幅 -5% < open_pct < 5%
-       - 9:35前 日内最高价涨幅 < 10%
-       - 9:35~9:40 日内最高价涨幅 < 15%
-    2. 9:41 ~ 10:59 仅读取缓存内标的，判断日内涨幅>11%
+       - 9:45 日内最高价涨幅 < 8%
+       - 9:45~9:55 日内最高价涨幅 < 15%
+    2. 9:55 ~ 11:30 仅读取缓存内标的，判断日内涨幅>11%
     3. 满足涨幅条件：写入Log_SmallArbitrageStock.txt + 追加Position_Stock.txt
     4. 当日同一股票仅记录一次，避免重复日志
     """
-    # 跨时段缓存：9:40前筛选合格股票，9:41后复用
+    # 跨时段缓存：9:45前筛选合格股票，9:55后复用
     BasicSetCache = set()
+    # 新增：9:45-9:55冲高超15%永久黑名单，当日不再准入
+    high_rush_blacklist = set()
     # 当日已记录股票去重集合
     record_set = set()
     # 交易日标记，次日清空缓存
@@ -2481,12 +2532,18 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
         #    cache_date = today_str
         #    write_arbitrage_log(f"【缓存重置】交易日切换，清空开盘筛选缓存")
 
-        # ========== 阶段1：9:30 ~ 9:40 持续筛选，存入缓存 ==========
-        if curr_h == 9 and 30 <= curr_m <= 40:
+        # ========== 阶段1：9:30 ~ 9:55 持续筛选，存入缓存 ==========
+        if curr_h == 9 and 30 <= curr_m <= 55:
             for code in smallstock_pool:
+
+                # 核心优化：已经冲高拉黑的直接跳过，不再计算任何条件
+                if code in high_rush_blacklist:
+                    continue
+
                 tick_info = parse_tick_info(code)
                 if not tick_info:
                     continue
+                now_price = tick_info["now"]
                 open_pct = tick_info["open_pct"]
                 pre_close = tick_info["pre_close"]
                 high_price = tick_info["high"]
@@ -2499,24 +2556,27 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
                 high_pct = (high_price / pre_close - 1) * 100
 
                 # 分时段最高价限制校验
-                if curr_m <= 35:
-                    # 9:30-9:35 最高价涨幅小于10%
+                if curr_m <= 45:
+                    # 9:30-9:45 最高价涨幅小于8%
                     if high_pct >= 10:
                         continue
                 else:
-                    # 9:36-9:40 最高价涨幅小于15%
+                    # 9:45-9:55 最高价涨幅小于15%
                     if high_pct >= 15:
                         # 超标，若已在缓存则移除
                         if code in BasicSetCache:
                             BasicSetCache.remove(code)
+                        # 加入当日黑名单，后续循环永远不再进池
+                        high_rush_blacklist.add(code)
                         continue
+
                 # 全部条件通过，加入缓存集合（自动去重）
                 BasicSetCache.add(code)
             time.sleep(2)
             continue
 
-        # ========== 阶段2：9:41 ~ 10:59 读取缓存，判断涨幅触发信号 ==========
-        if (curr_h == 9 and curr_m >= 41) or (curr_h == 10 and curr_m <= 59):
+        # ========== 阶段2：9:55 ~ 11:30 读取缓存，判断涨幅触发信号 ==========
+        if (curr_h == 9 and curr_m >= 55) or (curr_h == 10) or (curr_h == 13) or (curr_h == 14) or (curr_h == 11 and curr_m <= 30):
             # 缓存为空直接跳过
             if not BasicSetCache:
                 time.sleep(0.5)
@@ -2529,9 +2589,27 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
                 tick_info = parse_tick_info(code)
                 if not tick_info:
                     continue
+                now_price = tick_info["now"]
                 day_pct = tick_info["day_pct"]
                 name = tick_info["name"]
                 short_name = name[:4].ljust(4, "　")
+
+                #-----------三个交易日涨幅不大于20%----------
+                df = xtdata.get_market_data(
+                    field_list=["close"],
+                    stock_list=[code],
+                    period="1d",
+                    count=5
+                )
+                # df["close"] → DataFrame，index 是 code，columns 是时间
+                close_ser = df["close"].iloc[0]  # 这只票的最近K线收盘序列
+                if len(close_ser) < 3:
+                    continue
+                close_3d_ago = close_ser.iloc[0]   # 往前取第三根K线（含今日现价）
+                three_day_total_pct = (now_price - close_3d_ago) / close_3d_ago
+                if three_day_total_pct >= 0.20:
+                    continue
+                #-----------三个交易日涨幅不大于20%----------
 
                 # 触发条件：日内实时涨幅大于11%
                 if day_pct > 11:
@@ -2558,7 +2636,7 @@ def small_stock_arbitrage_monitor(smallstock_pool, is_running):
 
 def run(pool, smallstock_pool, cond1_stocks, cond2_stocks, cond3_stocks):
     """主策略运行入口：启动全部后台线程、循环选股"""
-
+    
     is_running = [True]
     # 启动【持仓股均价】监控线程，打印到终端和日志
     threading.Thread(target=position_avg_price_monitor, args=(is_running,), daemon=True).start()
@@ -2869,20 +2947,24 @@ if __name__ == "__main__":
         print(f"✅ 全市场A股总数：{len(all_a_shares)} 只")
         # 6. 基础风控过滤，生成候选股票池
         stock_pool = [s for s in all_a_shares if basic_filter(s)]         #流动市值大于100
-        smallstock_pool = [s for s in all_a_shares if basic_filter2(s)]   #流动市值小于100
+        smallstock_pool = [s for s in all_a_shares if basic_filter2(s)]   #流动市值小于200
         print(f"✅ 风控过滤后候选股票池：{len(stock_pool)} 只")
         print(f"✅ 科创板和北交所小市值：{len(smallstock_pool)} 只")
         # 7. 批量下载近6天日线（仅未缓存标的）
-        print("✅ 正在批量加载近10天日线数据...")
+        print("✅ 正在批量加载大市值近10天日线数据...")
         batch_download_history(stock_pool, days=10)
+        print("✅ 正在批量加载小市值近10天日线数据...")
+        batch_download_history(smallstock_pool, days=10)
         time.sleep(1)
         # 8. 加载通达信板块映射关系
         #init_stock_sector_dict()
         # 9. 批量订阅股票池全部Tick行情
         init_subscribe(stock_pool)
         time.sleep(2.5)
+        init_subscribe(smallstock_pool)
+        time.sleep(2.5)
         # 10. 筛选两类强势股，用于后台回调监控
-        cond1, cond2, cond3 = filter_strong_stocks_separate(stock_pool)
+        cond1, cond2, cond3 = filter_strong_stocks_separate(stock_pool,smallstock_pool)
         # 11. 日志过滤、将一天的量价突破日志和容量冲高回落日志中的代码提取出来
         parse_log_stock_filter_with_name()
         # 12. 启动主策略循环（后台线程+定时选股）
